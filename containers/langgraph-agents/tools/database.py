@@ -64,6 +64,49 @@ async def get_embedding(text: str) -> List[float]:
         return []
 
 
+async def get_embeddings_batch(texts: List[str]) -> List[Optional[List[float]]]:
+    """
+    Get embedding vectors for multiple texts in parallel.
+
+    PERFORMANCE OPTIMIZATION: Processes multiple embeddings concurrently
+    instead of sequentially.
+
+    Args:
+        texts: List of texts to embed
+
+    Returns:
+        List of embedding vectors (or None for failed embeddings)
+    """
+    import asyncio
+
+    async def get_single_embedding(text: str) -> Optional[List[float]]:
+        """Wrapper to handle individual embedding failures."""
+        try:
+            return await get_embedding(text)
+        except Exception as e:
+            logger.error(f"Error getting embedding for text: {e}")
+            return None
+
+    # Process all embeddings concurrently
+    try:
+        embeddings = await asyncio.gather(
+            *[get_single_embedding(text) for text in texts],
+            return_exceptions=False
+        )
+        return embeddings
+    except Exception as e:
+        logger.error(f"Error in batch embedding: {e}")
+        # Fallback to sequential processing
+        embeddings = []
+        for text in texts:
+            try:
+                emb = await get_embedding(text)
+                embeddings.append(emb)
+            except Exception:
+                embeddings.append(None)
+        return embeddings
+
+
 def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
     """
     Calculate cosine similarity between two vectors.
@@ -691,17 +734,26 @@ async def create_task(
             logger.info(f"Checking similarity against {len(recent_tasks)} recent tasks")
 
             if recent_tasks:
+                # PERFORMANCE FIX: Batch embedding processing
                 # Get embedding for new task
                 new_task_text = f"{title}. {description or ''}"
                 logger.info(f"Getting embedding for new task: {new_task_text[:50]}...")
-                new_embedding = await get_embedding(new_task_text)
+
+                # Prepare all texts for batch processing
+                all_texts = [new_task_text]
+                existing_texts = [f"{task['title']}. {task['description'] or ''}" for task in recent_tasks]
+                all_texts.extend(existing_texts)
+
+                # Get all embeddings in parallel
+                all_embeddings = await get_embeddings_batch(all_texts)
+                new_embedding = all_embeddings[0] if all_embeddings else None
+
                 logger.info(f"New task embedding: {len(new_embedding) if new_embedding else 0} dimensions")
 
                 if new_embedding:
-                    # Compare with existing tasks
-                    for task in recent_tasks:
-                        existing_text = f"{task['title']}. {task['description'] or ''}"
-                        existing_embedding = await get_embedding(existing_text)
+                    # Compare with existing tasks using batch-generated embeddings
+                    for i, task in enumerate(recent_tasks):
+                        existing_embedding = all_embeddings[i + 1]  # +1 because new_task is at index 0
 
                         if existing_embedding:
                             similarity = cosine_similarity(new_embedding, existing_embedding)

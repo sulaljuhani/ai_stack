@@ -1,0 +1,164 @@
+agents:
+  - name: food_agent
+    enabled: true
+    context_key: food
+    prompt_file: prompts/food_agent.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:food_core
+      - tag:food_vector
+      - tag:food_recommendations
+      - tag:memory_context
+    exclude_tools: []
+    keywords:
+      - term: food
+        weight: 1.2
+      - meal
+      - eat
+      - lunch
+      - dinner
+      - breakfast
+      - snack
+      - diet
+      - recipe
+      - restaurant
+    description: Handles food logging, meal suggestions, nutrition, and preferences.
+
+  - name: task_agent
+    enabled: true
+    context_key: task
+    prompt_file: prompts/task_agent.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:tasks_core
+      - tag:tasks_dependencies
+      - tag:tasks_checklists
+      - tag:tasks_bulk
+      - tag:tasks_search
+      - tag:tasks_quick_wins
+      - tag:tasks_analytics
+      - tag:memory_context
+    exclude_tools: []
+    keywords:
+      - term: task
+        weight: 1.5
+      - todo
+      - deadline
+      - priority
+      - project
+      - work on
+      - create a task
+      - add task
+      - task list
+    description: Task management, planning, productivity, dependencies, and checklists.
+
+  - name: event_agent
+    enabled: true
+    context_key: event
+    prompt_file: prompts/event_agent.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:events_core
+      - tag:events_bulk
+      - tag:events_recurring
+      - tag:events_search
+      - tag:events_schedule
+      - tag:events_analytics
+      - tag:memory_context
+      - tag:search_shared
+    exclude_tools: []
+    keywords:
+      - term: event
+        weight: 1.5
+      - calendar
+      - schedule
+      - meeting
+      - appointment
+      - availability
+      - book
+      - reserve
+      - add to calendar
+    description: Calendar events, scheduling, conflicts, and attendee coordination.
+
+  - name: reminder_agent
+    enabled: true
+    context_key: reminder
+    prompt_file: prompts/reminder_agent.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:reminders_core
+      - tag:reminders_bulk
+      - tag:reminders_analytics
+      - tag:memory_context
+      - tag:search_shared
+    exclude_tools: []
+    keywords:
+      - term: remind
+        weight: 1.2
+      - reminder
+      - alert
+      - notify
+      - follow up
+      - snooze
+      - nudge
+    description: Reminders, follow-ups, snoozes, and nudge workflows.
+
+  - name: knowledge_agent
+    enabled: true
+    context_key: knowledge
+    prompt_file: prompts/knowledge_agent.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:memory_core
+      - tag:documents
+      - tag:memory_vector
+      - tag:memory_context
+      - integration_status
+      - unified_search
+    exclude_tools: []
+    keywords:
+      - term: memory
+        weight: 1.8
+      - remember
+      - note
+      - save
+      - recall
+      - document
+      - search
+      - knowledge
+      - vault
+    description: Memory retrieval, document search, vault operations, and knowledge queries.
+
+  - name: note_agent
+    enabled: true
+    context_key: note
+    prompt_file: prompts/note_agent.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:notes_core
+      - tag:notes_support
+      - tag:memory_context
+    exclude_tools: []
+    keywords:
+      - term: note
+        weight: 1.6
+      - journal
+      - log
+      - write down
+      - append note
+      - capture
+      - save this
+      - summary note
+    description: Captures and appends notes to the vault and triggers embeddings.

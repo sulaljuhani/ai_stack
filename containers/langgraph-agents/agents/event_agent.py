@@ -9,40 +9,10 @@ Refactored following LangGraph tutorial best practices:
 
 from typing import Dict, Any
 from datetime import datetime
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 from graph.state import MultiAgentState
-from tools import (
-    # Basic event operations (6 tools)
-    search_events,
-    create_event,
-    get_events_today,
-    get_events_week,
-    check_time_conflicts,
-    unified_search,  # Cross-entity search
-    # Event bulk operations (5 tools)
-    bulk_create_events,
-    bulk_update_event_status,
-    bulk_reschedule_events,
-    bulk_add_attendees,
-    bulk_delete_events,
-    # Event recurring (5 tools)
-    create_recurring_event,
-    update_recurring_series,
-    skip_recurring_instance,
-    delete_recurring_series,
-    get_recurring_series,
-    # Event advanced search (4 tools)
-    search_by_attendees,
-    search_by_location,
-    advanced_event_filter,
-    get_event_statistics,
-    # Event scheduling (4 tools)
-    find_available_slots,
-    suggest_meeting_times,
-    bulk_check_conflicts,
-    get_busy_free_times,
-)
 from utils.logging import get_logger
+from agents.agent_registry import get_agent_config, get_agent_tools
 from .base import (
     load_system_prompt,
     create_context_message,
@@ -57,41 +27,15 @@ logger = get_logger(__name__)
 # MODULE-LEVEL CONFIGURATION (Created once, reused forever)
 # ============================================================================
 
-# Load system prompt once
-EVENT_AGENT_PROMPT = load_system_prompt("event_agent")
-
-# Define tools once (25 tools total: 6 original + 18 new + unified_search)
-EVENT_TOOLS = [
-    # Basic event operations (6 tools)
-    search_events,
-    create_event,
-    get_events_today,
-    get_events_week,
-    check_time_conflicts,
-    unified_search,  # Cross-entity search
-    # Event bulk operations (5 tools)
-    bulk_create_events,
-    bulk_update_event_status,
-    bulk_reschedule_events,
-    bulk_add_attendees,
-    bulk_delete_events,
-    # Event recurring (5 tools)
-    create_recurring_event,
-    update_recurring_series,
-    skip_recurring_instance,
-    delete_recurring_series,
-    get_recurring_series,
-    # Event advanced search (4 tools)
-    search_by_attendees,
-    search_by_location,
-    advanced_event_filter,
-    get_event_statistics,
-    # Event scheduling (4 tools)
-    find_available_slots,
-    suggest_meeting_times,
-    bulk_check_conflicts,
-    get_busy_free_times,
-]
+# Load config and resources once
+EVENT_AGENT_CONFIG = get_agent_config("event_agent")
+EVENT_AGENT_PROMPT = load_system_prompt(
+    "event_agent",
+    prompt_file=EVENT_AGENT_CONFIG.prompt_file,
+    partial_files=EVENT_AGENT_CONFIG.partials,
+)
+EVENT_TOOLS = get_agent_tools("event_agent")
+EVENT_CONTEXT_KEY = EVENT_AGENT_CONFIG.context_key
 
 # Create ReAct agent once (following tutorial pattern)
 _event_react_agent = None
@@ -142,7 +86,7 @@ async def event_agent_node(state: MultiAgentState) -> Dict[str, Any]:
         agent = _get_event_agent()
 
         # Create context message (following tutorial pattern)
-        context_message = create_context_message(state, "event", EVENT_AGENT_PROMPT)
+        context_message = create_context_message(state, EVENT_CONTEXT_KEY, EVENT_AGENT_PROMPT)
 
         # Prepend context to messages
         messages_with_context = [context_message] + list(state["messages"])
@@ -168,7 +112,7 @@ async def event_agent_node(state: MultiAgentState) -> Dict[str, Any]:
 
         # Update agent context (consolidated structure)
         agent_contexts = state.get("agent_contexts", {})
-        agent_contexts["event"] = {
+        agent_contexts[EVENT_CONTEXT_KEY] = {
             "last_interaction": datetime.utcnow().isoformat(),
             "last_topic": response_content[:200],
         }

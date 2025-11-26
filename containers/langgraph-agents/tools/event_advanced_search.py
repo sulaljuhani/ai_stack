@@ -4,15 +4,40 @@ Advanced search and analytics for calendar events.
 Leverages full-text search, JSONB queries, and aggregations.
 """
 
-from typing import List, Dict, Any, Optional
+import json
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 from langchain_core.tools import tool
 from utils.db import get_db_pool
 from utils.logging import get_logger
+from .validation import (
+    sanitize_string,
+    validate_count,
+    validate_date_range,
+    validate_email,
+    validate_iso_datetime,
+)
 
 logger = get_logger(__name__)
 
 USER_ID = "00000000-0000-0000-0000-000000000001"
+
+
+def _validate_user(user_id: str) -> Tuple[bool, Optional[str]]:
+    """Ensure calls are scoped to the single supported user."""
+    if not user_id:
+        return False, "user_id is required"
+    if user_id != USER_ID:
+        return False, "Unauthorized user_id"
+    return True, None
+
+
+def _validate_limit(limit: int, max_limit: int = 100) -> Tuple[bool, Optional[str], int]:
+    """Validate and normalize limit/count values."""
+    is_valid, error = validate_count(limit, min_val=1, max_val=max_limit)
+    if not is_valid:
+        return False, error, limit
+    return True, None, int(limit)
 
 
 @tool
@@ -21,7 +46,7 @@ async def search_by_attendees(
     user_id: str = USER_ID,
     match_all: bool = False,
     limit: int = 20
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     Find events by attendee email addresses.
 
@@ -36,24 +61,54 @@ async def search_by_attendees(
         - Find events with both Sarah AND Mike: ["sarah@", "mike@"], match_all=True
 
     Returns:
-        List of matching events with attendee details
+        Dict with success flag and matching events with attendee details
     """
     pool = await get_db_pool()
-    limit = min(limit, 100)
 
     try:
+        is_valid_user, user_error = _validate_user(user_id)
+        if not is_valid_user:
+            return {"success": False, "error": user_error, "results": []}
+
+        is_valid_limit, limit_error, normalized_limit = _validate_limit(limit, max_limit=100)
+        if not is_valid_limit:
+            return {"success": False, "error": limit_error, "results": []}
+
+        if not attendee_emails:
+            return {"success": False, "error": "attendee_emails is required", "results": []}
+
+        validated_emails = []
+        email_params = []
+        for email in attendee_emails:
+            sanitized_email = sanitize_string(email, max_length=254)
+            if not sanitized_email:
+                return {
+                    "success": False,
+                    "error": "Attendee email cannot be empty",
+                    "results": []
+                }
+            is_valid_email, email_error = validate_email(sanitized_email)
+            if not is_valid_email:
+                return {
+                    "success": False,
+                    "error": f"Invalid attendee email '{email}': {email_error}",
+                    "results": []
+                }
+            validated_emails.append(sanitized_email)
+            email_params.append(json.dumps([{"email": sanitized_email}]))
+
         async with pool.acquire() as conn:
             if match_all:
                 conditions = []
                 params = [user_id]
-                param_idx = 2
 
-                for email in attendee_emails:
-                    conditions.append(f"attendees @> $({param_idx})::jsonb")
-                    params.append(f'[{{"email": "{email}"}}]')
-                    param_idx += 1
+                for email_json in email_params:
+                    param_idx = len(params) + 1
+                    conditions.append(f"attendees @> ${param_idx}::jsonb")
+                    params.append(email_json)
 
                 where_clause = " AND ".join(conditions) if conditions else "TRUE"
+                params.append(normalized_limit)
 
                 query = f"""
                     SELECT
@@ -62,7 +117,7 @@ async def search_by_attendees(
                     FROM events
                     WHERE user_id = $1 AND {where_clause}
                     ORDER BY start_time ASC
-                    LIMIT {limit}
+                    LIMIT ${len(params)}
                 """
             else:
                 query = """
@@ -76,7 +131,7 @@ async def search_by_attendees(
                     ORDER BY e.start_time ASC
                     LIMIT $3
                 """
-                params = [user_id, attendee_emails, limit]
+                params = [user_id, validated_emails, normalized_limit]
 
             rows = await conn.fetch(query, *params)
 
@@ -94,11 +149,11 @@ async def search_by_attendees(
                 })
 
             logger.info(f"Found {len(results)} events with attendees")
-            return results
+            return {"success": True, "results": results, "count": len(results)}
 
     except Exception as e:
-        logger.error(f"Error searching by attendees: {e}")
-        return []
+        logger.error(f"Error searching by attendees: {e}", exc_info=True)
+        return {"success": False, "error": "Failed to search attendees", "results": []}
 
 
 @tool
@@ -107,7 +162,7 @@ async def search_by_location(
     user_id: str = USER_ID,
     include_conference_links: bool = True,
     limit: int = 20
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     Find events by location or conference link.
 
@@ -123,14 +178,26 @@ async def search_by_location(
         - "Downtown" - finds events at downtown locations
 
     Returns:
-        List of matching events
+        Dict with success flag and matching events
     """
     pool = await get_db_pool()
 
     try:
-        async with pool.acquire() as conn:
-            pattern = f"%{location_query}%"
+        is_valid_user, user_error = _validate_user(user_id)
+        if not is_valid_user:
+            return {"success": False, "error": user_error, "results": []}
 
+        sanitized_location = sanitize_string(location_query, max_length=255)
+        if not sanitized_location:
+            return {"success": False, "error": "location_query is required", "results": []}
+
+        is_valid_limit, limit_error, normalized_limit = _validate_limit(limit, max_limit=100)
+        if not is_valid_limit:
+            return {"success": False, "error": limit_error, "results": []}
+
+        pattern = f"%{sanitized_location}%"
+
+        async with pool.acquire() as conn:
             if include_conference_links:
                 query = """
                     SELECT
@@ -156,27 +223,27 @@ async def search_by_location(
                     LIMIT $3
                 """
 
-            rows = await conn.fetch(query, user_id, pattern, limit)
+            rows = await conn.fetch(query, user_id, pattern, normalized_limit)
 
-            results = []
-            for row in rows:
-                results.append({
-                    "id": str(row["id"]),
-                    "title": row["title"],
-                    "start_time": row["start_time"].isoformat(),
-                    "end_time": row["end_time"].isoformat(),
-                    "location": row["location"],
-                    "conference_link": row["conference_link"],
-                    "attendees_count": len(row["attendees"]) if row["attendees"] else 0,
-                    "status": row["status"]
-                })
+        results = []
+        for row in rows:
+            results.append({
+                "id": str(row["id"]),
+                "title": row["title"],
+                "start_time": row["start_time"].isoformat(),
+                "end_time": row["end_time"].isoformat(),
+                "location": row["location"],
+                "conference_link": row["conference_link"],
+                "attendees_count": len(row["attendees"]) if row["attendees"] else 0,
+                "status": row["status"]
+            })
 
-            logger.info(f"Found {len(results)} events matching location '{location_query}'")
-            return results
+        logger.info(f"Found {len(results)} events matching location '{sanitized_location}'")
+        return {"success": True, "results": results, "count": len(results)}
 
     except Exception as e:
-        logger.error(f"Error searching by location: {e}")
-        return []
+        logger.error(f"Error searching by location: {e}", exc_info=True)
+        return {"success": False, "error": "Failed to search by location", "results": []}
 
 
 @tool
@@ -191,7 +258,7 @@ async def advanced_event_filter(
     end_date: Optional[str] = None,
     location_contains: Optional[str] = None,
     limit: int = 50
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     Advanced multi-criteria event filtering.
 
@@ -210,12 +277,49 @@ async def advanced_event_filter(
         limit: Maximum results (default 50, max 100)
 
     Returns:
-        List of matching events
+        Dict with success flag and matching events
     """
     pool = await get_db_pool()
-    limit = min(limit, 100)
 
     try:
+        is_valid_user, user_error = _validate_user(user_id)
+        if not is_valid_user:
+            return {"success": False, "error": user_error, "results": []}
+
+        is_valid_limit, limit_error, normalized_limit = _validate_limit(limit, max_limit=100)
+        if not is_valid_limit:
+            return {"success": False, "error": limit_error, "results": []}
+
+        allowed_statuses = {"confirmed", "tentative", "cancelled"}
+        if status:
+            invalid_statuses = [s for s in status if s not in allowed_statuses]
+            if invalid_statuses:
+                return {
+                    "success": False,
+                    "error": f"Invalid status values: {', '.join(invalid_statuses)}",
+                    "results": []
+                }
+
+        sanitized_tags = [t for t in (sanitize_string(tag, max_length=50) for tag in tags)] if tags else []
+        sanitized_tags = [t for t in sanitized_tags if t]
+
+        if start_date:
+            is_valid_start, start_error = validate_iso_datetime(start_date)
+            if not is_valid_start:
+                return {"success": False, "error": start_error, "results": []}
+
+        if end_date:
+            is_valid_end, end_error = validate_iso_datetime(end_date)
+            if not is_valid_end:
+                return {"success": False, "error": end_error, "results": []}
+
+        if start_date and end_date:
+            is_valid_range, range_error = validate_date_range(start_date, end_date)
+            if not is_valid_range:
+                return {"success": False, "error": range_error, "results": []}
+
+        sanitized_location = sanitize_string(location_contains, max_length=255) if location_contains else None
+
         conditions = ["user_id = $1"]
         params = [user_id]
         param_idx = 2
@@ -225,9 +329,9 @@ async def advanced_event_filter(
             params.append(status)
             param_idx += 1
 
-        if tags:
+        if sanitized_tags:
             conditions.append(f"tags && ${param_idx}")
-            params.append(tags)
+            params.append(sanitized_tags)
             param_idx += 1
 
         if has_attendees is not None:
@@ -257,9 +361,9 @@ async def advanced_event_filter(
             params.append(end_date)
             param_idx += 1
 
-        if location_contains:
+        if sanitized_location:
             conditions.append(f"location ILIKE ${param_idx}")
-            params.append(f"%{location_contains}%")
+            params.append(f"%{sanitized_location}%")
             param_idx += 1
 
         where_clause = " AND ".join(conditions)
@@ -273,32 +377,32 @@ async def advanced_event_filter(
             ORDER BY start_time ASC
             LIMIT ${param_idx}
         """
-        params.append(limit)
+        params.append(normalized_limit)
 
         async with pool.acquire() as conn:
             rows = await conn.fetch(query, *params)
 
-            results = []
-            for row in rows:
-                results.append({
-                    "id": str(row["id"]),
-                    "title": row["title"],
-                    "description": row["description"],
-                    "start_time": row["start_time"].isoformat(),
-                    "end_time": row["end_time"].isoformat(),
-                    "location": row["location"],
-                    "attendees_count": len(row["attendees"]) if row["attendees"] else 0,
-                    "status": row["status"],
-                    "tags": row["tags"],
-                    "is_all_day": row["is_all_day"]
-                })
+        results = []
+        for row in rows:
+            results.append({
+                "id": str(row["id"]),
+                "title": row["title"],
+                "description": row["description"],
+                "start_time": row["start_time"].isoformat(),
+                "end_time": row["end_time"].isoformat(),
+                "location": row["location"],
+                "attendees_count": len(row["attendees"]) if row["attendees"] else 0,
+                "status": row["status"],
+                "tags": row["tags"],
+                "is_all_day": row["is_all_day"]
+            })
 
-            logger.info(f"Advanced filter found {len(results)} events")
-            return results
+        logger.info(f"Advanced filter found {len(results)} events")
+        return {"success": True, "results": results, "count": len(results)}
 
     except Exception as e:
-        logger.error(f"Error in advanced event filter: {e}")
-        return []
+        logger.error(f"Error in advanced event filter: {e}", exc_info=True)
+        return {"success": False, "error": "Failed to run advanced event filter", "results": []}
 
 
 @tool
@@ -316,17 +420,28 @@ async def get_event_statistics(
         end_date: End of analysis period (default: today)
 
     Returns:
-        Statistics including:
-        - Total events and meeting hours
-        - Average meeting length
-        - Events by status
-        - Events by location
-        - Busiest day of week
-        - Events by tags
+        Dict with success flag and statistics payload
     """
     pool = await get_db_pool()
 
     try:
+        is_valid_user, user_error = _validate_user(user_id)
+        if not is_valid_user:
+            return {"success": False, "error": user_error}
+
+        if start_date:
+            is_valid_start, start_error = validate_iso_datetime(start_date)
+            if not is_valid_start:
+                return {"success": False, "error": start_error}
+        if end_date:
+            is_valid_end, end_error = validate_iso_datetime(end_date)
+            if not is_valid_end:
+                return {"success": False, "error": end_error}
+        if start_date and end_date:
+            is_valid_range, range_error = validate_date_range(start_date, end_date)
+            if not is_valid_range:
+                return {"success": False, "error": range_error}
+
         if not start_date:
             start_date = (datetime.now() - timedelta(days=30)).isoformat()
         if not end_date:
@@ -394,32 +509,32 @@ async def get_event_statistics(
                 user_id, start_date, end_date
             )
 
-            result = {
-                "period": {
-                    "start": start_date,
-                    "end": end_date
-                },
-                "totals": {
-                    "total_events": int(totals["total_events"] or 0),
-                    "total_hours": round(float(totals["total_hours"] or 0), 1),
-                    "avg_meeting_minutes": round(float(totals["avg_minutes"] or 0), 1)
-                },
-                "by_status": {row["status"]: int(row["count"]) for row in by_status},
-                "by_day_of_week": {row["day_name"].strip(): int(row["count"]) for row in by_day},
-                "by_location": {row["location"]: int(row["count"]) for row in by_location}
-            }
+        result = {
+            "period": {
+                "start": start_date,
+                "end": end_date
+            },
+            "totals": {
+                "total_events": int(totals["total_events"] or 0),
+                "total_hours": round(float(totals["total_hours"] or 0), 1),
+                "avg_meeting_minutes": round(float(totals["avg_minutes"] or 0), 1)
+            },
+            "by_status": {row["status"]: int(row["count"]) for row in by_status},
+            "by_day_of_week": {row["day_name"].strip(): int(row["count"]) for row in by_day},
+            "by_location": {row["location"]: int(row["count"]) for row in by_location}
+        }
 
-            if result["by_day_of_week"]:
-                result["busiest_day"] = max(
-                    result["by_day_of_week"],
-                    key=result["by_day_of_week"].get
-                )
-            else:
-                result["busiest_day"] = None
+        if result["by_day_of_week"]:
+            result["busiest_day"] = max(
+                result["by_day_of_week"],
+                key=result["by_day_of_week"].get
+            )
+        else:
+            result["busiest_day"] = None
 
-            logger.info(f"Generated event statistics: {result['totals']['total_events']} events")
-            return result
+        logger.info(f"Generated event statistics: {result['totals']['total_events']} events")
+        return {"success": True, "statistics": result}
 
     except Exception as e:
-        logger.error(f"Error getting event statistics: {e}")
-        return {"error": str(e)}
+        logger.error(f"Error getting event statistics: {e}", exc_info=True)
+        return {"success": False, "error": "Failed to calculate event statistics"}

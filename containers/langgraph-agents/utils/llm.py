@@ -4,7 +4,10 @@ LLM provider abstraction for easy switching between Ollama and OpenAI.
 
 from typing import Optional
 from langchain_core.language_models import BaseChatModel
-from langchain_community.chat_models import ChatOllama
+try:
+    from langchain_ollama import ChatOllama
+except ImportError:
+    from langchain_community.chat_models import ChatOllama
 from langchain_openai import ChatOpenAI
 from config import settings
 

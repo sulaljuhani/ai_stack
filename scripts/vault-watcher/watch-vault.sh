@@ -5,14 +5,9 @@
 set -e
 
 # Configuration
-VAULT_DIR="${VAULT_DIR:-/mnt/user/appdata/ai_stack/vault}"
-LANGGRAPH_API_URL="${LANGGRAPH_API_URL:-http://langgraph-agents:8080}"
+VAULT_DIR="${VAULT_DIR:-/mnt/user/data/vault}"
+LANGGRAPH_API_URL="${LANGGRAPH_API_URL:-http://localhost:8000}"
 API_ENDPOINT="${LANGGRAPH_API_URL}/api/vault/reembed"
-POSTGRES_HOST="${POSTGRES_HOST:-postgres-ai-stack}"
-POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-POSTGRES_DB="${POSTGRES_DB:-aistack}"
-POSTGRES_USER="${POSTGRES_USER:-aistack_user}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD}"
 DEBOUNCE_SECONDS="${DEBOUNCE_SECONDS:-5}"
 
 # Colors
@@ -56,24 +51,6 @@ calculate_file_hash() {
     fi
 }
 
-check_if_changed() {
-    local file="$1"
-    local current_hash=$(calculate_file_hash "$file")
-
-    # Query database for existing hash
-    EXISTING_HASH=$(PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "
-        SELECT file_hash FROM file_sync
-        WHERE file_path = '${file#$VAULT_DIR/}'
-        LIMIT 1
-    " 2>/dev/null)
-
-    if [ "$current_hash" != "$EXISTING_HASH" ]; then
-        return 0  # Changed
-    else
-        return 1  # Not changed
-    fi
-}
-
 process_file() {
     local file="$1"
     local event="$2"
@@ -100,14 +77,6 @@ process_file() {
 
     last_processed["$file"]=$current_time
 
-    # Check if file actually changed
-    if [ "$event" = "MODIFY" ]; then
-        if ! check_if_changed "$file"; then
-            echo -e "${BLUE}⏭${NC}  Skipped (unchanged): $relative_path"
-            return
-        fi
-    fi
-
     local file_hash=$(calculate_file_hash "$file")
     local file_size=$(stat -c%s "$file" 2>/dev/null || echo "0")
 
@@ -119,11 +88,7 @@ process_file() {
         -H "Content-Type: application/json" \
         -d "{
             \"file_path\": \"$file\",
-            \"relative_path\": \"$relative_path\",
-            \"file_hash\": \"$file_hash\",
-            \"file_size\": $file_size,
-            \"event\": \"$event\",
-            \"timestamp\": \"$(date -Iseconds)\"
+            \"file_hash\": \"$file_hash\"
         }" 2>&1)
 
     HTTP_CODE=$(echo "$RESPONSE" | tail -n1)

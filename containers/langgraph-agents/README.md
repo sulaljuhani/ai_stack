@@ -1,16 +1,18 @@
 # LangGraph Multi-Agent System
 
-A sophisticated multi-agent system built with LangGraph, featuring specialized agents for food management, task tracking, and calendar events. Implements intelligent routing, seamless handoffs, and Redis-based state persistence.
+A sophisticated multi-agent system built with LangGraph, featuring specialized agents for food management, task tracking, calendar events, and note capture. Implements intelligent routing, seamless handoffs, and Redis-based state persistence.
 
 ## 🎯 Features
 
 ### Core Capabilities
-- **Multi-Agent Architecture**: Three specialized agents (Food, Task, Event) with domain expertise
+- **Multi-Agent Architecture**: Six specialized agents (Food, Task, Event, Reminder, Note, Knowledge) with domain expertise
+- **Config-Driven Registry**: `config/agents.yaml` declares prompts, keywords, and toolkits; `agent_registry` + `tool_registry` assemble agents at runtime
 - **Hybrid Routing**: Fast keyword-based routing with LLM fallback for complex queries
 - **Intelligent Handoffs**: Automatic domain detection and context-preserving agent transitions
 - **State Management**: Redis-based persistence with automatic pruning
 - **Flexible LLM Support**: Easy switching between Ollama and OpenAI-compatible providers
 - **Hybrid Search**: Combined database queries and vector search for intelligent recommendations
+- **Standardized Tool Responses**: Shared response envelope keeps tool outputs predictable for agents/UI
 
 ### Agent Specializations
 
@@ -34,6 +36,21 @@ A sophisticated multi-agent system built with LangGraph, featuring specialized a
 - Available time slot suggestions
 - Time blocking support
 - Meeting coordination
+
+#### ⏰ Reminder Agent
+- Reminder creation and updates
+- Snoozes, bulk status changes, and undo for bulk actions
+- Daily/soon reminder surfacing
+
+#### 🧠 Knowledge Agent
+- OpenMemory and vault search
+- Document embedding/re-embedding with safeguards
+- Memory health checks and duplicate detection
+
+#### 📝 Note Agent
+- Captures, writes, and appends markdown notes into the vault
+- Uses `/mnt/user/data/vault` (configurable via `VAULT_PATH`) with safe path enforcement
+- Triggers immediate embeddings into Qdrant/OpenMemory after writes
 
 ## 🏗️ Architecture
 
@@ -71,6 +88,13 @@ A sophisticated multi-agent system built with LangGraph, featuring specialized a
 - **Simple queries**: Direct keyword matching (fast)
 - **Complex queries**: LLM-based routing (accurate)
 - **Handoffs**: Automatic domain shift detection
+- **Tunable**: Keywords + weights live in `config/agents.yaml` for quick routing bias tweaks
+
+**Registry & Extensibility**
+- Agent registry (`config/agents.yaml`) controls prompts, routing keywords, and toolkits
+- Tool registry + ToolRunner wrap LangChain tools with shared metrics/events
+- Feature switches per agent/tool via `enabled`, `exclude_tools`, and prompt partials
+- Standard response envelopes for tools (`tools/models.py`) keep outputs consistent
 
 **Tool Layer**
 - **Database Tools**: Direct SQL queries for structured data
@@ -131,6 +155,12 @@ STATE_PRUNING_ENABLED=true
 STATE_MAX_MESSAGES=20
 STATE_TTL_SECONDS=86400
 ```
+
+#### Agent Registry (config/agents.yaml)
+- `enabled`: turn agents on/off without code changes
+- `tools`: tool/tag selectors; use `exclude_tools` to hide specific tools
+- `partials`: shared prompt snippets (persona/safety/style)
+- `keywords`: terms with optional `weight` to tune routing bias
 
 ## 📡 API Usage
 

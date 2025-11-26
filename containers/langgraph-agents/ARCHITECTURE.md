@@ -70,9 +70,8 @@ START → Routing Node → Agent Node → Decision → (Routing or END)
    - More expensive but accurate
 
 **Routing Keywords**:
-- Food: food, meal, eat, lunch, dinner, nutrition, etc.
-- Task: task, todo, remind, deadline, priority, etc.
-- Event: calendar, schedule, meeting, appointment, etc.
+- Configured in `config/agents.yaml` with optional weights per term
+- Memory/doc bias stays with knowledge_agent when memory terms dominate
 
 ### 4. Agents
 
@@ -116,6 +115,13 @@ async def agent_node(state: MultiAgentState) -> Dict[str, Any]:
 - Specify domain boundaries
 - Provide handoff guidelines
 - Set personality and approach
+- Can include shared partials (safety/style) via `partials` listed per agent in `config/agents.yaml`
+
+#### Registry-driven composition
+- **Agent registry (`config/agents.yaml` + `agents/agent_registry.py`)** declares each agent’s prompt path, context key, routing keywords, and toolkit selectors. Workflow creation and routing now read from this registry instead of hardcoding agent lists.
+- **Tool registry (`tools/tool_registry.py`)** centralizes tool metadata and tags. Agents request toolkits by tag/name, enabling easy extension or per-deployment enable/disable without touching agent code.
+- **ToolRunner** wraps LangChain tools to emit metrics/events and preserve args schemas, so observability stays consistent while keeping agent code minimal.
+- **Event bus (`utils/event_bus.py`)** provides a lightweight publish/subscribe layer; ToolRunner emits `tool.called|succeeded|failed` events which feed the metrics counters.
 
 ### 5. Handoff Detection
 
@@ -172,6 +178,9 @@ class HandoffDecision:
 - Each agent sees only relevant tools
 - Tools are LangChain-compatible
 - Async execution supported
+- `tools/tool_registry.py` exposes tag-based selection; `ToolRunner` adds shared metrics/events and wraps outputs into a common envelope
+- `tools/models.py` defines standard envelopes (success/message/count/items/meta) plus search and bulk shapes
+- Feature toggles: agents can exclude tools via `exclude_tools` in `config/agents.yaml`
 
 ### 7. State Persistence
 

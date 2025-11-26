@@ -8,7 +8,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from .state import MultiAgentState, prune_messages, should_prune_state
 from .routing import route_to_agent, should_route_to_new_agent
 from .checkpointer import RedisCheckpointSaver
-from agents import food_agent_node, task_agent_node, event_agent_node, reminder_agent_node
+from agents.agent_registry import list_agent_names, get_agent_node
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -88,19 +88,16 @@ def should_continue(state: MultiAgentState) -> Literal["route", "end"]:
     return "end"
 
 
-def route_to_agent_node(state: MultiAgentState) -> Literal["food_agent", "task_agent", "event_agent", "reminder_agent"]:
-    """
-    Conditional edge function to route to specific agent.
+def _build_route_to_agent_node(default_agent: str):
+    def route_to_agent_node(state: MultiAgentState) -> str:
+        """
+        Conditional edge function to route to specific agent.
+        """
+        agent = state.get("current_agent", default_agent)
+        logger.info(f"Routing to agent node: {agent}")
+        return agent
 
-    Args:
-        state: Current state
-
-    Returns:
-        Agent node name
-    """
-    agent = state.get("current_agent", "food_agent")
-    logger.info(f"Routing to agent node: {agent}")
-    return agent
+    return route_to_agent_node
 
 
 def create_workflow(checkpointer: BaseCheckpointSaver = None) -> StateGraph:
@@ -134,15 +131,17 @@ def create_workflow(checkpointer: BaseCheckpointSaver = None) -> StateGraph:
     """
     logger.info("Creating workflow graph")
 
+    agent_names = list_agent_names()
+    if not agent_names:
+        raise RuntimeError("No agents registered")
+
     # Create graph
     workflow = StateGraph(MultiAgentState)
 
     # Add nodes (following tutorial pattern with enhancements)
     workflow.add_node("routing", create_routing_node())  # Classifier + Router combined
-    workflow.add_node("food_agent", food_agent_node)     # Specialist agent
-    workflow.add_node("task_agent", task_agent_node)     # Specialist agent
-    workflow.add_node("event_agent", event_agent_node)   # Specialist agent
-    workflow.add_node("reminder_agent", reminder_agent_node)   # Specialist agent
+    for agent_name in agent_names:
+        workflow.add_node(agent_name, get_agent_node(agent_name))
 
     # Set entry point (like tutorial's START → first_node)
     workflow.set_entry_point("routing")
@@ -150,17 +149,12 @@ def create_workflow(checkpointer: BaseCheckpointSaver = None) -> StateGraph:
     # Add conditional edge from routing to specific agent
     workflow.add_conditional_edges(
         "routing",
-        route_to_agent_node,
-        {
-            "food_agent": "food_agent",
-            "task_agent": "task_agent",
-            "event_agent": "event_agent",
-            "reminder_agent": "reminder_agent",
-        }
+        _build_route_to_agent_node(agent_names[0]),
+        {name: name for name in agent_names},
     )
 
     # Add edges from each agent back to routing or end
-    for agent in ["food_agent", "task_agent", "event_agent", "reminder_agent"]:
+    for agent in agent_names:
         workflow.add_conditional_edges(
             agent,
             should_continue,

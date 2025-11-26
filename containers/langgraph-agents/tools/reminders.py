@@ -2,13 +2,14 @@
 Reminder tools for creation, search, and updates.
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 from dateutil import parser as date_parser
 from langchain_core.tools import tool
 from utils.db import get_db_pool
 from utils.logging import get_logger
 from .database import normalize_due_date, validate_limit
+from .validation import sanitize_string, validate_count, validate_iso_datetime
 
 logger = get_logger(__name__)
 
@@ -70,6 +71,14 @@ def _normalize_recurrence(recurrence: Optional[str]) -> Optional[str]:
     return recurrence_lower
 
 
+def _validate_user(user_id: str) -> Tuple[bool, Optional[str]]:
+    if not user_id:
+        return False, "user_id is required"
+    if user_id != DEFAULT_USER_ID:
+        return False, "Unauthorized user_id"
+    return True, None
+
+
 @tool
 async def search_reminders(
     user_id: str,
@@ -78,7 +87,7 @@ async def search_reminders(
     category: Optional[str] = None,
     include_completed: bool = True,
     limit: int = 20
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     Search reminders with optional filters.
 
@@ -90,10 +99,16 @@ async def search_reminders(
         include_completed: Include completed reminders when no status is provided
         limit: Maximum results (max 100)
     """
-    validate_limit(limit)
+    is_valid_user, user_error = _validate_user(user_id)
+    if not is_valid_user:
+        return {"success": False, "error": user_error, "reminders": []}
+
+    is_valid_limit, limit_error = validate_count(limit, min_val=1, max_val=100)
+    if not is_valid_limit:
+        return {"success": False, "error": limit_error, "reminders": []}
 
     if status and status not in VALID_STATUSES:
-        raise ValueError(f"Invalid status: {status}")
+        return {"success": False, "error": f"Invalid status: {status}", "reminders": []}
 
     priority_int = _normalize_priority(priority) if priority is not None else None
 
@@ -139,10 +154,10 @@ async def search_reminders(
         async with pool.acquire() as conn:
             rows = await conn.fetch(query, *params)
             logger.info(f"Found {len(rows)} reminders")
-            return [dict(row) for row in rows]
+            return {"success": True, "count": len(rows), "reminders": [dict(row) for row in rows]}
     except Exception as e:
         logger.error(f"Error searching reminders: {e}", exc_info=True)
-        raise
+        return {"success": False, "error": "Failed to search reminders", "reminders": []}
 
 
 @tool
@@ -169,12 +184,16 @@ async def create_reminder(
         recurrence: Recurrence rule (daily/weekly/monthly/yearly)
         tags: Optional list of tags
     """
+    is_valid_user, user_error = _validate_user(user_id)
+    if not is_valid_user:
+        return {"success": False, "error": user_error}
+
     if not title or not title.strip():
-        raise ValueError("title is required")
+        return {"success": False, "error": "title is required"}
 
     parsed_remind_at = _normalize_remind_at(remind_at)
     if not parsed_remind_at:
-        raise ValueError("remind_at is required and must be a valid date/time")
+        return {"success": False, "error": "remind_at is required and must be a valid date/time"}
 
     priority_int = _normalize_priority(priority)
     recurrence_rule = _normalize_recurrence(recurrence)
@@ -240,23 +259,26 @@ async def create_reminder(
             logger.info(f"Created reminder {row['id']} at {row['remind_at']}")
 
             return {
-                "id": str(row["id"]),
-                "title": row["title"],
-                "description": row["description"],
-                "remind_at": row["remind_at"],
-                "priority": row["priority"],
-                "category_id": str(row["category_id"]) if row["category_id"] else None,
-                "recurrence": row["recurrence_rule"] or "none",
-                "status": row["status"],
-                "tags": row["tags"],
-                "completed_at": row["completed_at"],
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
+                "success": True,
+                "reminder": {
+                    "id": str(row["id"]),
+                    "title": row["title"],
+                    "description": row["description"],
+                    "remind_at": row["remind_at"].isoformat() if row["remind_at"] else None,
+                    "priority": row["priority"],
+                    "category_id": str(row["category_id"]) if row["category_id"] else None,
+                    "recurrence": row["recurrence_rule"] or "none",
+                    "status": row["status"],
+                    "tags": row["tags"],
+                    "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                    "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                }
             }
 
     except Exception as e:
         logger.error(f"Error creating reminder: {e}", exc_info=True)
-        raise
+        return {"success": False, "error": "Failed to create reminder"}
 
 
 @tool
@@ -276,11 +298,15 @@ async def update_reminder(
     """
     Update an existing reminder. Only provided fields are updated.
     """
+    is_valid_user, user_error = _validate_user(user_id)
+    if not is_valid_user:
+        return {"success": False, "error": user_error}
+
     if not reminder_id:
-        raise ValueError("reminder_id is required")
+        return {"success": False, "error": "reminder_id is required"}
 
     if status and status not in VALID_STATUSES:
-        raise ValueError(f"Invalid status: {status}")
+        return {"success": False, "error": f"Invalid status: {status}"}
 
     updates = []
     params = [reminder_id, user_id]
@@ -299,7 +325,7 @@ async def update_reminder(
     if remind_at is not None:
         parsed = _normalize_remind_at(remind_at)
         if not parsed:
-            raise ValueError("remind_at must be a valid date/time")
+            return {"success": False, "error": "remind_at must be a valid date/time"}
         param_count += 1
         params.append(parsed)
         updates.append(f"remind_at = ${param_count}")
@@ -334,18 +360,20 @@ async def update_reminder(
     if category is not None:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
+            # SECURITY FIX: Filter by user_id to prevent cross-user category access
             category_row = await conn.fetchrow(
-                "SELECT id FROM categories WHERE name = $1 AND type = 'reminder'",
-                category
+                "SELECT id FROM categories WHERE name = $1 AND type = 'reminder' AND user_id = $2",
+                category, user_id
             )
             if not category_row:
+                # SECURITY FIX: Set user_id when creating new category
                 category_row = await conn.fetchrow(
                     """
-                    INSERT INTO categories (name, type, color)
-                    VALUES ($1, 'reminder', '#F59E0B')
+                    INSERT INTO categories (name, type, color, user_id)
+                    VALUES ($1, 'reminder', '#F59E0B', $2)
                     RETURNING id
                     """,
-                    category
+                    category, user_id
                 )
             category_id = category_row["id"]
             param_count += 1
@@ -360,7 +388,7 @@ async def update_reminder(
         updates.append(f"tags = ${param_count}")
 
     if not updates:
-        raise ValueError("No fields to update")
+        return {"success": False, "error": "No fields to update"}
 
     updates.append("updated_at = NOW()")
 
@@ -378,26 +406,29 @@ async def update_reminder(
         async with pool.acquire() as conn:
             row = await conn.fetchrow(query, *params)
             if not row:
-                raise ValueError("Reminder not found or unauthorized")
+                return {"success": False, "error": "Reminder not found or unauthorized"}
 
             logger.info(f"Updated reminder {reminder_id}")
             return {
-                "id": str(row["id"]),
-                "title": row["title"],
-                "description": row["description"],
-                "remind_at": row["remind_at"],
-                "priority": row["priority"],
-                "category_id": str(row["category_id"]) if row["category_id"] else None,
-                "recurrence": row["recurrence_rule"] or "none",
-                "status": row["status"],
-                "tags": row["tags"],
-                "completed_at": row["completed_at"],
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
+                "success": True,
+                "reminder": {
+                    "id": str(row["id"]),
+                    "title": row["title"],
+                    "description": row["description"],
+                    "remind_at": row["remind_at"].isoformat() if row["remind_at"] else None,
+                    "priority": row["priority"],
+                    "category_id": str(row["category_id"]) if row["category_id"] else None,
+                    "recurrence": row["recurrence_rule"] or "none",
+                    "status": row["status"],
+                    "tags": row["tags"],
+                    "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                    "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                }
             }
     except Exception as e:
         logger.error(f"Error updating reminder {reminder_id}: {e}", exc_info=True)
-        raise
+        return {"success": False, "error": "Failed to update reminder"}
 
 
 @tool
@@ -413,8 +444,12 @@ async def complete_reminder(
 async def get_reminders_today(
     user_id: str = DEFAULT_USER_ID,
     include_completed: bool = False
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """Get reminders scheduled for today."""
+    is_valid_user, user_error = _validate_user(user_id)
+    if not is_valid_user:
+        return {"success": False, "error": user_error, "reminders": []}
+
     status_filter = "" if include_completed else "AND r.status <> 'completed'"
     pool = await get_db_pool()
 
@@ -436,10 +471,10 @@ async def get_reminders_today(
         async with pool.acquire() as conn:
             rows = await conn.fetch(query, user_id)
             logger.info(f"Found {len(rows)} reminders for today")
-            return [dict(row) for row in rows]
+            return {"success": True, "count": len(rows), "reminders": [dict(row) for row in rows]}
     except Exception as e:
         logger.error(f"Error fetching today's reminders: {e}", exc_info=True)
-        raise
+        return {"success": False, "error": "Failed to fetch today's reminders", "reminders": []}
 
 
 @tool
@@ -448,12 +483,16 @@ async def get_reminders_due_soon(
     minutes_ahead: int = 1440,
     include_completed: bool = False,
     limit: int = 20
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     Get reminders due within the next N minutes.
     """
+    is_valid_user, user_error = _validate_user(user_id)
+    if not is_valid_user:
+        return {"success": False, "error": user_error, "reminders": []}
+
     if minutes_ahead < 1 or minutes_ahead > 10080:
-        raise ValueError("minutes_ahead must be between 1 and 10080")
+        return {"success": False, "error": "minutes_ahead must be between 1 and 10080", "reminders": []}
 
     validate_limit(limit)
 
@@ -481,7 +520,7 @@ async def get_reminders_due_soon(
         async with pool.acquire() as conn:
             rows = await conn.fetch(query, user_id, minutes_ahead, limit)
             logger.info(f"Found {len(rows)} upcoming reminders")
-            return [dict(row) for row in rows]
+            return {"success": True, "count": len(rows), "reminders": [dict(row) for row in rows]}
     except Exception as e:
         logger.error(f"Error fetching upcoming reminders: {e}", exc_info=True)
-        raise
+        return {"success": False, "error": "Failed to fetch upcoming reminders", "reminders": []}

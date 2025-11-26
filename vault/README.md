@@ -2,9 +2,12 @@
 
 Welcome to your AI Stack knowledge vault! This vault is integrated with:
 
-- **AnythingLLM** - Chat with RAG over your notes
+- **OpenWebUI (current)** - Primary chat UI via the LangGraph adapter/pipe
 - **OpenMemory** - Long-term memory across all your AI conversations
 - **File Watcher** - Auto-embedding when you edit files
+- **AnythingLLM** - Present historically but **not used right now**
+
+> Active vault path: `/mnt/user/data/vault` (bind-mounted into the LangGraph agents). Use this location for new notes created by the note-taking agent.
 
 ## 📁 Folder Structure
 
@@ -13,6 +16,7 @@ Welcome to your AI Stack knowledge vault! This vault is integrated with:
 - `references/` - Reference materials, guides, how-tos
 - `templates/` - Note templates
 - `attachments/` - Images, PDFs, and other files
+- `facts/` - Canonical facts you want the assistant to keep top-of-mind
 
 ## 🚀 Getting Started
 
@@ -27,11 +31,11 @@ When you save a markdown file, it's automatically:
 1. Detected by the file watcher
 2. Embedded using nomic-embed-text (768 dims)
 3. Stored in Qdrant vector database
-4. Made searchable in AnythingLLM
+4. Made searchable in OpenWebUI (via LangGraph) and tools
 
 ### Integration with AI Stack
 Your notes are accessible via:
-- **AnythingLLM chat**: "What did I write about Docker?"
+- **OpenWebUI + LangGraph**: Ask for notes or facts directly in chat
 - **MCP tools**: `search_notes("docker")`
 - **Vector search**: Semantic similarity matching
 
@@ -55,7 +59,7 @@ Access templates from the ribbon:
 - Search: `Ctrl/Cmd + Shift + F`
 - Graph view: `Ctrl/Cmd + G`
 
-### In AnythingLLM
+### In OpenWebUI
 Ask questions like:
 - "Summarize my notes about Python"
 - "What projects am I working on?"

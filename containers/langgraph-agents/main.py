@@ -26,7 +26,8 @@ from utils.db import close_db_pool
 from utils.redis_client import close_redis_client
 from services.scheduler import setup_scheduler, shutdown_scheduler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from routers import tasks_router, reminders_router, events_router, vault_router, documents_router, memory_router, imports_router
+from routers import tasks_router, reminders_router, events_router, vault_router, documents_router, memory_router, imports_router, chat_stream_router
+from utils.metrics import get_metrics_snapshot
 
 # Setup logging
 setup_logging()
@@ -79,6 +80,9 @@ app = FastAPI(
     description="Multi-agent system for food, tasks, and events management",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url=None,  # Disable /docs
+    redoc_url=None,  # Disable /redoc
+    openapi_url=None,  # Disable /openapi.json
 )
 
 # Add CORS middleware with restricted origins
@@ -88,12 +92,41 @@ app.add_middleware(
     allow_origins=settings.get_cors_origins,  # FIX: Restricted to specific origins
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # FIX: Specific methods only
-    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],  # FIX: Specific headers
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-API-Key"],  # Include API key header
 )
 
 # Add rate limiting
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+# API Key Authentication Middleware
+@app.middleware("http")
+async def verify_api_key(request: Request, call_next):
+    """Verify API key for all requests except health check and OPTIONS."""
+    # Skip auth for health endpoint
+    if request.url.path == "/health":
+        return await call_next(request)
+
+    # Skip auth for OPTIONS requests (CORS preflight)
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    # Skip auth if no API key is configured
+    if not settings.api_key:
+        return await call_next(request)
+
+    # Get API key from header
+    api_key = request.headers.get("X-API-Key")
+
+    # Validate API key
+    if api_key != settings.api_key:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid or missing API key"}
+        )
+
+    return await call_next(request)
 
 
 # Custom validation handler: 400 for transport/format issues, 422 for domain validation
@@ -148,6 +181,9 @@ app.include_router(memory_router)
 
 # Include routers for chat history imports (replaces n8n workflows 16, 17, 19)
 app.include_router(imports_router)
+
+# Include router for OpenAI-compatible streaming chat (Open WebUI integration)
+app.include_router(chat_stream_router)
 
 
 # ============================================================================
@@ -212,6 +248,12 @@ async def health():
         "timestamp": datetime.utcnow().isoformat(),
         "llm_provider": settings.llm_provider,
     }
+
+
+@app.get("/metrics")
+async def metrics():
+    """Basic in-memory metrics snapshot."""
+    return get_metrics_snapshot()
 
 
 @app.post("/chat", response_model=ChatResponse)

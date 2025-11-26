@@ -215,11 +215,29 @@ class Pipe:
             return f"Error: {error_msg}"
 
     def _extract_user_message(self, messages: List[dict]) -> str:
-        """Extract the last user message from messages array."""
+        """Extract the last user message from messages array, filtering out Open WebUI system prompts."""
+        # Open WebUI internal system prompts to filter out (these are not real user questions)
+        system_prompt_prefixes = [
+            "### Task:",
+            "Suggest 3-5 relevant follow-up questions",
+            "Generate a concise, 3-5 word title",
+            "Generate 1-3 broad tags",
+        ]
+
         for message in reversed(messages):
             if message.get("role") == "user":
-                return message.get("content", "")
-        # Fallback: return the last message
+                content = message.get("content", "")
+
+                # Skip Open WebUI's internal system prompts
+                is_system_prompt = any(
+                    content.strip().startswith(prefix)
+                    for prefix in system_prompt_prefixes
+                )
+
+                if not is_system_prompt:
+                    return content
+
+        # Fallback: return the last message if no real user message found
         return messages[-1].get("content", "") if messages else ""
 
     def _extract_content(self, langgraph_response: dict) -> str:

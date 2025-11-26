@@ -1,13 +1,13 @@
 # AI Stack - Vault File Watcher
 
-Monitors the Obsidian vault for file changes and automatically triggers re-embedding.
+Monitors the vault for file changes and automatically triggers re-embedding via the LangGraph API (OpenWebUI path).
 
 ## 🎯 Purpose
 
-When you edit markdown files in your Obsidian vault, this watcher:
+When you edit markdown files in your vault, this watcher:
 1. Detects file changes in real-time
 2. Calculates file hash to detect actual content changes
-3. Triggers n8n webhook for re-embedding
+3. Calls LangGraph `/api/vault/reembed` for embeddings
 4. Updates vector database with new embeddings
 
 ## 🚀 Quick Start
@@ -18,8 +18,8 @@ When you edit markdown files in your Obsidian vault, this watcher:
 cd /mnt/user/appdata/ai_stack/scripts/vault-watcher
 
 # Set environment variables (optional)
-export VAULT_DIR=/mnt/user/appdata/ai_stack/vault
-export N8N_WEBHOOK=http://n8n-ai-stack:5678/webhook/reembed-file
+export VAULT_DIR=/mnt/user/data/vault
+export LANGGRAPH_API_URL=http://localhost:8000
 
 # Run watcher
 ./watch-vault.sh
@@ -40,13 +40,8 @@ cd C:\ai_stack\scripts\vault-watcher
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VAULT_DIR` | `/mnt/user/appdata/ai_stack/vault` | Vault directory path |
-| `N8N_WEBHOOK` | `http://n8n-ai-stack:5678/webhook/reembed-file` | n8n webhook URL |
-| `POSTGRES_HOST` | `postgres-ai-stack` | PostgreSQL hostname |
-| `POSTGRES_PORT` | `5432` | PostgreSQL port |
-| `POSTGRES_DB` | `aistack` | Database name |
-| `POSTGRES_USER` | `aistack_user` | Database user |
-| `POSTGRES_PASSWORD` | *(required)* | Database password |
+| `VAULT_DIR` | `/mnt/user/data/vault` | Vault directory path |
+| `LANGGRAPH_API_URL` | `http://localhost:8000` | LangGraph API base URL |
 | `DEBOUNCE_SECONDS` | `5` | Debounce time |
 
 ### PowerShell Parameters

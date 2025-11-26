@@ -7,8 +7,9 @@ Key improvements following LangGraph tutorial best practices:
 - Simple agent functions (minimal overhead)
 """
 
+import json
 from typing import Literal, Optional, List, Callable
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
@@ -44,6 +45,55 @@ def get_cached_llm(temperature: float = 0.7):
     return _cached_llms[cache_key]
 
 
+def stringify_tool_messages(state_or_messages):
+    """
+    State modifier that ensures all ToolMessage content is stringified.
+
+    OpenAI-compatible APIs (like DeepSeek) require tool results to be strings,
+    not arrays or objects. This function converts all ToolMessage content to
+    JSON strings if needed. It accepts either the full state dict (as passed by
+    create_react_agent state_modifier) or a bare list of messages.
+
+    Args:
+        state_or_messages: Full state or list of messages
+
+    Returns:
+        Messages with stringified ToolMessage content
+    """
+    # create_react_agent passes the entire state into state_modifier; pull messages if so
+    if isinstance(state_or_messages, dict):
+        messages = state_or_messages.get("messages", [])
+    else:
+        messages = state_or_messages or []
+
+    modified = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            # If content is not a string, stringify it
+            if not isinstance(msg.content, str):
+                try:
+                    # Convert lists/dicts to JSON strings
+                    stringified_content = json.dumps(msg.content, default=str, ensure_ascii=False)
+                    # Create new ToolMessage with stringified content
+                    modified.append(ToolMessage(
+                        content=stringified_content,
+                        tool_call_id=msg.tool_call_id,
+                        name=msg.name if hasattr(msg, 'name') else None,
+                    ))
+                except Exception as e:
+                    logger.warning(f"Failed to stringify tool message: {e}, using str()")
+                    modified.append(ToolMessage(
+                        content=str(msg.content),
+                        tool_call_id=msg.tool_call_id,
+                        name=msg.name if hasattr(msg, 'name') else None,
+                    ))
+            else:
+                modified.append(msg)
+        else:
+            modified.append(msg)
+    return modified
+
+
 def create_cached_react_agent(
     agent_name: str,
     tools: List[Callable],
@@ -69,8 +119,8 @@ def create_cached_react_agent(
     agent = create_react_agent(
         model=llm,
         tools=tools,
-        # Use state_modifier to ensure proper message formatting
-        state_modifier=None,  # Let LangGraph handle default formatting
+        # Use state_modifier to stringify tool results for OpenAI compatibility
+        state_modifier=stringify_tool_messages,
     )
 
     logger.info(f"Created {agent_name} with {len(tools)} tools")
@@ -81,7 +131,7 @@ class HandoffDecision(BaseModel):
     """Structured handoff decision."""
 
     should_handoff: bool
-    target_agent: Optional[Literal["food_agent", "task_agent", "event_agent", "reminder_agent"]] = None
+    target_agent: Optional[Literal["food_agent", "task_agent", "event_agent", "reminder_agent", "note_agent", "knowledge_agent"]] = None
     reason: Optional[str] = None
 
 
@@ -137,8 +187,8 @@ Agent domains:
 - task_agent: Tasks, todos, productivity, planning, notes, and memory storage
 - reminder_agent: Reminders, alerts, nudges, follow-ups
 - event_agent: Calendar, schedule, meetings, appointments, availability
-
-Note: Memory and note-related queries should go to task_agent.
+- note_agent: Capturing/writing/appending notes into the vault
+- knowledge_agent: Memory retrieval, document/vault search
 
 Analyze if the user's request requires a different agent.
 Look for:
@@ -179,30 +229,53 @@ Should we hand off to a different agent?""")
         return False, None, None
 
 
-def load_system_prompt(agent_name: str) -> str:
+def load_system_prompt(agent_name: str, prompt_file: str | None = None, partial_files: list[str] | None = None) -> str:
     """
-    Load system prompt from file.
+    Load system prompt from file and combine with universal personality.
 
     Args:
         agent_name: Name of agent (food_agent, task_agent, etc.)
 
     Returns:
-        System prompt text
+        Combined system prompt text (personality + agent-specific instructions)
     """
     import os
 
-    prompt_file = f"prompts/{agent_name}.txt"
+    # Load universal Sebastian personality
+    personality_file = "prompts/sebastian_personality.txt"
+    personality_prompt = ""
+    try:
+        if os.path.exists(personality_file):
+            with open(personality_file, "r") as f:
+                personality_prompt = f.read().strip()
+    except Exception as e:
+        logger.warning(f"Could not load personality prompt: {e}")
 
+    # Load agent-specific prompt
+    prompt_file = prompt_file or f"prompts/{agent_name}.txt"
+    agent_prompt = ""
     try:
         if os.path.exists(prompt_file):
             with open(prompt_file, "r") as f:
-                return f.read().strip()
+                agent_prompt = f.read().strip()
         else:
             logger.warning(f"Prompt file not found: {prompt_file}")
-            return f"You are a helpful {agent_name.replace('_', ' ')}."
+            agent_prompt = f"You are a helpful {agent_name.replace('_', ' ')}."
     except Exception as e:
         logger.error(f"Error loading prompt: {e}")
-        return f"You are a helpful {agent_name.replace('_', ' ')}."
+        agent_prompt = f"You are a helpful {agent_name.replace('_', ' ')}."
+
+    partial_prompts = []
+    for partial in partial_files or []:
+        try:
+            if os.path.exists(partial):
+                with open(partial, "r") as f:
+                    partial_prompts.append(f.read().strip())
+        except Exception as e:
+            logger.warning(f"Could not load partial prompt {partial}: {e}")
+
+    sections = [p for p in [personality_prompt, *partial_prompts, agent_prompt] if p]
+    return "\n\n---\n\n".join(sections)
 
 
 def create_context_message(state: MultiAgentState, agent_name: str, system_prompt: str) -> dict:

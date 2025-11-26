@@ -9,18 +9,10 @@ Refactored following LangGraph tutorial best practices:
 
 from typing import Dict, Any
 from datetime import datetime
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 from graph.state import MultiAgentState
-from tools import (
-    search_reminders,
-    create_reminder,
-    update_reminder,
-    complete_reminder,
-    get_reminders_today,
-    get_reminders_due_soon,
-    unified_search,
-)
 from utils.logging import get_logger
+from agents.agent_registry import get_agent_config, get_agent_tools
 from .base import (
     load_system_prompt,
     create_context_message,
@@ -35,19 +27,14 @@ logger = get_logger(__name__)
 # MODULE-LEVEL CONFIGURATION (Created once, reused forever)
 # ============================================================================
 
-# Load system prompt once
-REMINDER_AGENT_PROMPT = load_system_prompt("reminder_agent")
-
-# Define tools once
-REMINDER_TOOLS = [
-    search_reminders,
-    create_reminder,
-    update_reminder,
-    complete_reminder,
-    get_reminders_today,
-    get_reminders_due_soon,
-    unified_search,
-]
+REMINDER_AGENT_CONFIG = get_agent_config("reminder_agent")
+REMINDER_AGENT_PROMPT = load_system_prompt(
+    "reminder_agent",
+    prompt_file=REMINDER_AGENT_CONFIG.prompt_file,
+    partial_files=REMINDER_AGENT_CONFIG.partials,
+)
+REMINDER_TOOLS = get_agent_tools("reminder_agent")
+REMINDER_CONTEXT_KEY = REMINDER_AGENT_CONFIG.context_key
 
 # Create ReAct agent once (following tutorial pattern)
 _reminder_react_agent = None
@@ -88,7 +75,7 @@ async def reminder_agent_node(state: MultiAgentState) -> Dict[str, Any]:
     try:
         agent = _get_reminder_agent()
 
-        context_message = create_context_message(state, "reminder", REMINDER_AGENT_PROMPT)
+        context_message = create_context_message(state, REMINDER_CONTEXT_KEY, REMINDER_AGENT_PROMPT)
         messages_with_context = [context_message] + list(state["messages"])
 
         result = await agent.ainvoke(
@@ -108,7 +95,7 @@ async def reminder_agent_node(state: MultiAgentState) -> Dict[str, Any]:
         )
 
         agent_contexts = state.get("agent_contexts", {})
-        agent_contexts["reminder"] = {
+        agent_contexts[REMINDER_CONTEXT_KEY] = {
             "last_interaction": datetime.utcnow().isoformat(),
             "last_topic": response_content[:200],
         }

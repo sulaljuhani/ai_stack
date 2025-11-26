@@ -72,8 +72,17 @@ class Settings(BaseSettings):
     # For development: "http://localhost:3000,http://localhost:3001"
     cors_allowed_origins: str = "http://localhost:3001"
 
+    # API Security
+    api_key: str | None = None  # Optional API key for authentication
+
     # Logging
     log_level: str = "INFO"
+
+    # Vault / Documents
+    vault_path: str = "/mnt/user/data/vault"
+
+    # Single-user system
+    default_user_id: str = "00000000-0000-0000-0000-000000000001"
 
     # Validators
     @field_validator('postgres_password')
@@ -125,5 +134,18 @@ class Settings(BaseSettings):
         return f"http://{self.qdrant_host}:{self.qdrant_port}"
 
 
-# Global settings instance
-settings = Settings()
+_settings_singleton = Settings()
+
+
+def get_settings() -> Settings:
+    """
+    Accessor for the singleton Settings instance.
+
+    This makes it easy to inject settings into components (agents, tools, registries)
+    without importing the Settings class everywhere.
+    """
+    return _settings_singleton
+
+
+# Backwards-compatible alias
+settings = get_settings()

@@ -15,6 +15,7 @@ import os
 
 from utils.db import get_db_pool
 from utils.logging import get_logger
+from config import settings
 
 logger = get_logger(__name__)
 
@@ -166,8 +167,8 @@ async def sync_memory_to_vault() -> Dict[str, Any]:
         Dict with export statistics
     """
     try:
-        # Get vault path from environment or use default
-        vault_path = os.getenv("VAULT_PATH", "/data/vault")
+        # Get vault path from settings (default: /mnt/user/data/vault)
+        vault_path = settings.vault_path
         memory_export_dir = os.path.join(vault_path, "memory_exports")
 
         # Create export directory if it doesn't exist

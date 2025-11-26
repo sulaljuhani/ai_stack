@@ -8,10 +8,11 @@ Strategy: Simple queries → direct routing via keywords
 from typing import Literal
 from langchain_core.messages import BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from .state import MultiAgentState
 from utils.llm import get_routing_llm
 from utils.logging import get_logger
+from agents.agent_registry import get_weighted_keywords, list_agent_names, get_agent_descriptions
 
 logger = get_logger(__name__)
 
@@ -19,39 +20,21 @@ logger = get_logger(__name__)
 class RoutingDecision(BaseModel):
     """Structured routing decision."""
 
-    agent: Literal["food_agent", "task_agent", "event_agent", "reminder_agent"]
+    agent: str
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str
 
+    @field_validator("agent")
+    @classmethod
+    def validate_agent(cls, v: str) -> str:
+        valid_agents = list_agent_names()
+        if v not in valid_agents:
+            raise ValueError(f"Unknown agent '{v}', expected one of {valid_agents}")
+        return v
 
-# Simple keyword patterns for direct routing
-FOOD_KEYWORDS = [
-    "food", "meal", "eat", "ate", "eating", "lunch", "dinner", "breakfast",
-    "snack", "hungry", "diet", "nutrition", "recipe", "cook", "restaurant",
-    "suggest something to eat", "what should i eat", "food recommendation"
-]
 
-TASK_KEYWORDS = [
-    "task", "todo", "do", "complete", "finish", "deadline", "priority",
-    "project", "work on", "need to", "have to",
-    "create a task", "add task", "task list"
-]
-
-EVENT_KEYWORDS = [
-    "event", "calendar", "schedule", "meeting", "appointment", "plan",
-    "time", "date", "today", "tomorrow", "week", "available", "busy",
-    "book", "reserve", "add to calendar"
-]
-
-REMINDER_KEYWORDS = [
-    "remind", "reminder", "alert me", "notify", "ping me", "follow up",
-    "remind me", "set a reminder", "snooze", "nudge me", "remind at", "remind on"
-]
-
-MEMORY_KEYWORDS = [
-    "remember", "note", "save", "recall", "memory", "wrote", "document",
-    "search for", "find", "notes", "knowledge", "information about"
-]
+WEIGHTED_KEYWORDS = get_weighted_keywords()
+AGENT_DESCRIPTIONS = get_agent_descriptions()
 
 
 def simple_keyword_routing(message: str) -> str | None:
@@ -66,22 +49,20 @@ def simple_keyword_routing(message: str) -> str | None:
     """
     message_lower = message.lower()
 
-    # Count keyword matches for each domain
-    food_score = sum(1 for kw in FOOD_KEYWORDS if kw in message_lower)
-    task_score = sum(1 for kw in TASK_KEYWORDS if kw in message_lower)
-    event_score = sum(1 for kw in EVENT_KEYWORDS if kw in message_lower)
-    reminder_score = sum(1 for kw in REMINDER_KEYWORDS if kw in message_lower)
-    memory_score = sum(1 for kw in MEMORY_KEYWORDS if kw in message_lower)
+    # Count weighted keyword matches for each agent
+    scores = {}
+    for agent, keywords in WEIGHTED_KEYWORDS.items():
+        score = 0.0
+        for kw, weight in keywords:
+            if kw in message_lower:
+                score += weight
+        scores[agent] = score
 
-    # Route memory queries to task_agent (it has memory tools)
-    task_score += memory_score
-
-    scores = {
-        "food_agent": food_score,
-        "task_agent": task_score,
-        "event_agent": event_score,
-        "reminder_agent": reminder_score,
-    }
+    # Bias memory/doc queries to knowledge_agent if defined
+    memory_score = scores.get("knowledge_agent", 0)
+    if memory_score >= 2 and memory_score >= max(scores.values()):
+        logger.info(f"Simple routing: '{message[:50]}...' → knowledge_agent (memory score: {memory_score})")
+        return "knowledge_agent"
 
     # Get highest scoring agent
     max_agent = max(scores.items(), key=lambda x: x[1])
@@ -108,14 +89,16 @@ async def llm_routing(message: str, context: dict) -> RoutingDecision:
     Returns:
         Structured routing decision
     """
+    available_agents = "\n".join(
+        f"- {name}: {desc or 'No description set'}"
+        for name, desc in AGENT_DESCRIPTIONS.items()
+    )
+
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a routing agent that determines which specialized agent should handle a user's request.
+        ("system", f"""You are a routing agent that determines which specialized agent should handle a user's request.
 
 Available agents:
-- food_agent: Handles food logging, meal suggestions, dietary patterns, nutrition
-- task_agent: Handles task creation, planning, productivity, todos, notes, and memory/knowledge storage
-- reminder_agent: Handles reminders, nudges, follow-ups, and time-based alerts
-- event_agent: Handles calendar events, scheduling, meetings, time management
+{available_agents}
 
 Analyze the user's message and determine which agent is most appropriate.
 Consider:
@@ -123,7 +106,7 @@ Consider:
 2. Which agent has the most relevant expertise
 3. Context from previous conversation if available
 
-Note: Memory and note-related queries should go to task_agent as it has memory tools.
+Note: Memory/knowledge retrieval → knowledge_agent; note capture/writing → note_agent.
 
 Be decisive - pick the single most appropriate agent."""),
         ("user", """Message: {message}
@@ -153,22 +136,19 @@ Which agent should handle this request? Provide your reasoning.""")
 
             # Add JSON format instruction to prompt
             json_prompt = ChatPromptTemplate.from_messages([
-                ("system", """You are a routing assistant. Analyze the message and route to the appropriate agent.
+                ("system", f"""You are a routing assistant. Analyze the message and route to the appropriate agent.
 
 Available agents:
-- food_agent: Food logging, dietary preferences, meal suggestions
-- task_agent: Task management, todos, notes, and memory storage
-- reminder_agent: Reminders, alerts, follow-ups, nudges
-- event_agent: Calendar events, meetings, scheduling
+{available_agents}
 
-Note: Memory and note queries go to task_agent.
+Note: Memory/knowledge retrieval → knowledge_agent; note capture/writing → note_agent.
 
 Respond with ONLY a valid JSON object in this exact format:
 {{"agent": "agent_name", "confidence": 0.9, "reason": "brief explanation"}}
 
-Message: {message}
-Previous agent: {previous_agent}
-Context: {context}""")
+Message: {{message}}
+Previous agent: {{previous_agent}}
+Context: {{context}}""")
             ])
 
             response = await llm.ainvoke(
@@ -202,8 +182,9 @@ Context: {context}""")
 
     except Exception as e:
         logger.error(f"LLM routing failed: {e}, defaulting to food_agent")
+        default_agent = list_agent_names()[0] if list_agent_names() else "food_agent"
         return RoutingDecision(
-            agent="food_agent",
+            agent=default_agent,
             confidence=0.5,
             reason="Default fallback due to routing error"
         )
@@ -226,7 +207,7 @@ async def route_to_agent(state: MultiAgentState) -> str:
     # Get last user message
     messages = state["messages"]
     if not messages:
-        return "food_agent"  # Default
+        return list_agent_names()[0]  # Default
 
     last_message = messages[-1]
     message_content = last_message.content if hasattr(last_message, 'content') else str(last_message)

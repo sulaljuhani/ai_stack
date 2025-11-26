@@ -17,7 +17,7 @@ AI Stack combines multiple open-source tools into a unified system that:
 - **Runs 100% locally** - No data leaves your machine, complete privacy
 - **Integrates with Obsidian** - Auto-embed your notes for AI-powered search
 - **Manages your life** - Tasks, reminders, events, all AI-accessible
-- **Intelligent Agents** - Specialized AI agents with conversational interfaces for food, tasks, and planning
+- **Intelligent Agents** - 5 specialized AI agents with conversational interfaces for food, tasks, events, reminders, and knowledge
 
 ## ✨ What's Been Built
 
@@ -109,12 +109,13 @@ AI Stack features a **LangGraph multi-agent architecture** with specialized doma
 Advanced multi-agent orchestration with specialized domain experts, REST API, and background automation:
 
 **Core Architecture:**
-- 🤖 **4 Specialized Agents** - Food, Task, Event, Reminder experts
+- 🤖 **5 Specialized Agents** - Food, Task, Event, Reminder, Knowledge experts
 - 🌐 **21 REST API Endpoints** - Complete automation layer
 - ⏰ **10 Scheduled Jobs** - Background processing with APScheduler
 - 🔧 **30+ Tools** - Database operations, vector search, hybrid recommendations
 - 🔒 **Type-Safe** - Pydantic validation on all inputs
 - 📊 **Production Ready** - Tested, secure, fully documented
+- ↩️ **Bulk Undo** - Reminder and Event bulk actions support undo snapshots
 
 **Agent Flow Architecture:**
 
@@ -221,7 +222,7 @@ Advanced multi-agent orchestration with specialized domain experts, REST API, an
 - Coordinate reminders with events
 - Balance work and personal time
 
-**Tools:** `search_events`, `create_event`, `get_events_today`, `get_events_week`, `check_time_conflicts`, `unified_search`, `bulk_create_events`, `bulk_update_event_status`, `bulk_reschedule_events`, `bulk_add_attendees`, `bulk_delete_events`, `create_recurring_event`, `update_recurring_series`, `skip_recurring_instance`, `delete_recurring_series`, `get_recurring_series`, `search_by_attendees`, `search_by_location`, `advanced_event_filter`, `get_event_statistics`, `find_available_slots`, `suggest_meeting_times`, `bulk_check_conflicts`, `get_busy_free_times`
+**Tools:** `search_events`, `create_event`, `get_events_today`, `get_events_week`, `check_time_conflicts`, `unified_search`, `bulk_create_events`, `bulk_update_event_status`, `bulk_reschedule_events`, `bulk_add_attendees`, `bulk_delete_events`, `undo_last_event_action`, `create_recurring_event`, `update_recurring_series`, `skip_recurring_instance`, `delete_recurring_series`, `get_recurring_series`, `search_by_attendees`, `search_by_location`, `advanced_event_filter`, `get_event_statistics`, `find_available_slots`, `suggest_meeting_times`, `bulk_check_conflicts`, `get_busy_free_times`, `smart_schedule_day`
 
 ---
 
@@ -236,17 +237,51 @@ Advanced multi-agent orchestration with specialized domain experts, REST API, an
 - Integrate with Obsidian vault
 - Knowledge graph connections
 
-**Tools (available if enabled):** `store_chat_turn`, `search_memories`, `vector_search_memories`, `embed_document`, `reembed_vault_file`, `search_embedded_documents`
+**Tools (available if enabled):** `store_chat_turn`, `search_memories`, `memory_health`, `find_duplicate_memories`, `vector_search_memories`, `embed_document`, `reembed_vault_file`, `search_embedded_documents`, `integration_status`
 
 ---
 
-### Planned Agents (to be implemented)
+### Additional Planned Agents (future)
 
-- **Note-Taking Agent** 🗒️ — Write, edit, and recall notes on demand; will orchestrate document embeddings and memory storage.
 - **System Monitoring Agent** 🛡️ — Monitor AI Stack health (containers, DB/Qdrant/Ollama), surface issues proactively to the user.
 - **unRAID Monitoring Agent** 🖥️ — Track unRAID host metrics and array health, alert on disk/network/container problems.
 - **Home Assistant Monitoring Agent** 🏠 — Watch Home Assistant entities/automations and notify on sensor or automation anomalies.
 - **Automatic Task Agent** ⏱️ — Coordinate with other agents to run pre-specified tasks on schedules or dates (e.g., generate daily summaries of database contents and save them to markdown files in a designated folder).
+
+> 📋 **See [PLANNED_AGENTS_IMPLEMENTATION.md](PLANNED_AGENTS_IMPLEMENTATION.md)** for detailed implementation plans of these 4 agents with tool specs, database schemas, and timelines.
+
+### Automatic Knowledge Extraction 🧠 (Planned)
+
+**Proactive User Learning System** - Automatically extract and store user facts from conversations
+
+**Example Flow:**
+```
+User: "remind me to update my unraid server tomorrow"
+  ↓
+System: Creates reminder + extracts fact: "User has an unraid server"
+  ↓
+Future: "What servers do I have?"
+  ↓
+System: "You have an unraid server" ✅
+```
+
+**Key Features:**
+- 🎯 **Automatic extraction** - No manual note-taking needed
+- 🔍 **LLM-powered analysis** - Identifies implicit facts from messages
+- 📂 **Structured storage** - Updates `/vault/facts/user-profile-{user_id}.md`
+- 🔄 **Real-time embedding** - Facts immediately searchable
+- 🎚️ **Confidence filtering** - Only stores high/medium confidence facts
+- 🔒 **Multi-user ready** - Dynamic user_id support (single-user by default)
+
+**Categories:**
+- **Systems** - Tools, servers, infrastructure user owns
+- **Preferences** - Likes, dislikes, choices
+- **Projects** - What user is working on
+- **Context** - Setup, environment, workflow details
+- **Identity** - Name, role, personal info
+
+> 📋 **See [AUTO_KNOWLEDGE_EXTRACTION.md](AUTO_KNOWLEDGE_EXTRACTION.md)** for complete implementation plan, code examples, and testing strategy.
+> 📋 **See [MULTI_USER_CONSIDERATIONS.md](MULTI_USER_CONSIDERATIONS.md)** for user_id architecture, multi-user scaling paths, and security considerations.
 
 ---
 
@@ -277,7 +312,7 @@ Task Agent: "I see you were discussing food. Groceries for salmon?"
 |-----------|--------|-------------|
 | **unRAID Templates** | ✅ Complete | 8 XML templates for easy deployment |
 | **Custom WebUI** | ✅ Complete | React + TypeScript chat interface, mobile-responsive, dark mode |
-| **LangGraph Agents** | ✅ Complete | Multi-agent system with 4 specialists, 30+ tools |
+| **LangGraph Agents** | ✅ Complete | Multi-agent system with 5 specialists, 30+ tools |
 | **REST API Layer** | ✅ Complete | 21 endpoints for complete automation |
 | **APScheduler Jobs** | ✅ Complete | 10 background jobs for maintenance & sync |
 | **OpenMemory** | ✅ Integrated | Official long-term memory system with MCP |

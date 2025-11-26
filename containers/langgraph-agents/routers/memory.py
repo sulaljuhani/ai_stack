@@ -15,6 +15,8 @@ from pydantic import BaseModel
 from middleware.validation import StoreChatTurnRequest, SearchMemoriesRequest
 from tools.memory import store_chat_turn, search_memories
 from utils.logging import get_logger
+from utils.metrics import get_metrics_snapshot
+from utils.metrics import get_metrics_snapshot
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/memory", tags=["memory"])
@@ -304,6 +306,12 @@ async def get_memory_stats(user_id: Optional[str] = None):
     except Exception as e:
         logger.error(f"Error getting memory stats: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get memory stats: {str(e)}")
+
+
+@router.get("/metrics")
+async def memory_metrics():
+    """Return memory tool metrics snapshot."""
+    return get_metrics_snapshot()
 
 
 @router.get("/conversations")

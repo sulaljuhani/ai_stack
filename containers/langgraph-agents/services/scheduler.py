@@ -92,7 +92,7 @@ def setup_scheduler(scheduler: AsyncIOScheduler) -> None:
         expand_recurring_tasks
     )
     from services.maintenance import cleanup_old_data, health_check
-    from services.vault_sync import scheduled_vault_sync
+    from services.vault_sync import scheduled_vault_sync, watch_vault_changes
     from services.memory_service import enrich_memories, sync_memory_to_vault
     from services.external_sync import sync_todoist, sync_google_calendar
     import os
@@ -172,6 +172,17 @@ def setup_scheduler(scheduler: AsyncIOScheduler) -> None:
         replace_existing=True
     )
     logger.info("Registered job: vault_sync (every 12 hours)")
+
+    # Job 6b: Vault Watcher - every minute for fast note ingestion
+    scheduler.add_job(
+        watch_vault_changes,
+        'interval',
+        minutes=1,
+        id='vault_watch_fast',
+        name='Watch vault for changes',
+        replace_existing=True
+    )
+    logger.info("Registered job: vault_watch_fast (every minute)")
 
     # Job 7: Enrich Memories - 3 AM daily
     # Replaces n8n workflow: 11-enrich-memories.json

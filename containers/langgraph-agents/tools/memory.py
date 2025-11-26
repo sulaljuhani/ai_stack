@@ -9,7 +9,7 @@ Replaces functionality from n8n workflows:
 """
 
 from typing import Dict, Any, List, Optional, Callable, TypeVar
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import asyncio
 
@@ -18,9 +18,13 @@ import json
 from utils.db import get_db_pool
 from utils.logging import get_logger
 from config import settings
+from .validation import validate_count
+from utils.metrics import inc_counter, observe_duration, check_rate_limit
 
 logger = get_logger(__name__)
 T = TypeVar("T")
+
+MAX_MEMORY_CONTENT_CHARS = 5000
 
 
 # ============================================================================
@@ -261,6 +265,16 @@ async def store_chat_turn(
         Dict with memory ID, sectors, and status
     """
     try:
+        allowed, rl_error = check_rate_limit("store_chat_turn", max_calls=120, window_seconds=60)
+        if not allowed:
+            return {"success": False, "error": rl_error}
+
+        if len(content) > MAX_MEMORY_CONTENT_CHARS:
+            return {
+                "success": False,
+                "error": f"Content too long ({len(content)} chars). Max allowed is {MAX_MEMORY_CONTENT_CHARS}."
+            }
+
         pool = await get_db_pool()
 
         # Generate conversation_id if not provided
@@ -359,6 +373,8 @@ async def store_chat_turn(
 
             if not vector_stored:
                 logger.warning(f"Failed to store vectors for memory {memory_id}")
+            else:
+                inc_counter("memory.embeds")
 
             logger.info(
                 f"Stored chat turn: memory_id={memory_id}, "
@@ -416,7 +432,15 @@ async def search_memories(
         Dict with search results and optional summary
     """
     try:
+        is_valid_limit, limit_error = validate_count(limit, min_val=1, max_val=50)
+        if not is_valid_limit:
+            return {"success": False, "error": limit_error, "results": []}
+
         # 1. Generate query embedding
+        allowed, rl_error = check_rate_limit("search_memories", max_calls=180, window_seconds=60)
+        if not allowed:
+            return {"success": False, "error": rl_error, "results": []}
+
         query_embedding = await generate_memory_embedding(query)
 
         if not query_embedding:
@@ -515,19 +539,39 @@ async def search_memories(
                 "summary": None
             }
 
-        # Format results
+        # Format results with simple dedupe and recency-aware scoring
         results = []
+        seen_ids = set()
         for result in search_results:
+            mem_id = result.payload.get("memory_id")
+            if mem_id in seen_ids:
+                continue
+            seen_ids.add(mem_id)
+
+            created_raw = result.payload.get("created_at")
+            recency_boost = 0.0
+            if created_raw:
+                try:
+                    created_dt = datetime.fromisoformat(str(created_raw))
+                    days_old = max((datetime.now(timezone.utc) - created_dt.replace(tzinfo=timezone.utc)).days, 0)
+                    recency_boost = max(0.0, 0.1 - (days_old * 0.001))
+                except Exception:
+                    recency_boost = 0.0
+
             results.append({
-                "memory_id": result.payload.get("memory_id"),
-                "score": result.score,
+                "memory_id": mem_id,
+                "score": result.score + recency_boost,
                 "content": result.payload.get("content"),
                 "sector": result.payload.get("sector"),
                 "role": result.payload.get("role"),
                 "conversation_id": result.payload.get("conversation_id"),
                 "salience_score": result.payload.get("salience_score"),
-                "created_at": result.payload.get("created_at")
+                "created_at": created_raw
             })
+
+        # Sort with recency boost applied
+        results.sort(key=lambda r: r["score"], reverse=True)
+        inc_counter("memory.searches")
 
         logger.info(f"Found {len(results)} memories for query: {query[:50]}")
 
@@ -573,3 +617,56 @@ Provide a concise summary highlighting the key points."""
             "error": str(e),
             "results": []
         }
+
+
+@tool
+async def memory_health() -> Dict[str, Any]:
+    """
+    Report basic memory health stats (Qdrant counts).
+    """
+    try:
+        from qdrant_client import QdrantClient
+
+        client = QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port)
+        collection_name = settings.memory_collection_name
+
+        counts = client.count(collection_name=collection_name, exact=True)
+        return {"success": True, "collection": collection_name, "count": counts.count}
+    except Exception as e:
+        logger.error(f"Memory health check failed: {e}", exc_info=True)
+        return {"success": False, "error": "Failed to query Qdrant"}
+
+
+@tool
+async def find_duplicate_memories(limit: int = 50) -> Dict[str, Any]:
+    """
+    Find potential duplicate memories by content hash in Postgres (preview only).
+    """
+    is_valid, limit_error = validate_count(limit, min_val=1, max_val=200)
+    if not is_valid:
+        return {"success": False, "error": limit_error, "duplicates": []}
+
+    pool = await get_db_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT md5(content) as content_hash, ARRAY_AGG(id) as memory_ids, COUNT(*) as dup_count
+                FROM memories
+                GROUP BY md5(content)
+                HAVING COUNT(*) > 1
+                ORDER BY dup_count DESC
+                LIMIT $1
+                """,
+                limit
+            )
+        return {
+            "success": True,
+            "duplicates": [
+                {"content_hash": row["content_hash"], "memory_ids": row["memory_ids"], "count": row["dup_count"]}
+                for row in rows
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error finding duplicate memories: {e}", exc_info=True)
+        return {"success": False, "error": "Failed to find duplicates", "duplicates": []}

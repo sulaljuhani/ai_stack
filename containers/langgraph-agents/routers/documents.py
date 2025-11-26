@@ -13,6 +13,7 @@ from pathlib import Path
 from middleware.validation import EmbedDocumentRequest
 from tools.documents import embed_document, search_embedded_documents
 from utils.logging import get_logger
+from utils.metrics import get_metrics_snapshot
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -197,6 +198,12 @@ async def upload_and_embed(
     except Exception as e:
         logger.error(f"Error in upload-and-embed endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to upload and embed: {str(e)}")
+
+
+@router.get("/metrics")
+async def documents_metrics():
+    """Return document tool metrics snapshot."""
+    return get_metrics_snapshot()
 
 
 # ============================================================================

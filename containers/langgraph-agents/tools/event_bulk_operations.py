@@ -4,15 +4,61 @@ Bulk operations for calendar events.
 Enables efficient batch operations on multiple events at once.
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
+import json
 from datetime import datetime, timedelta
 from langchain_core.tools import tool
 from utils.db import get_db_pool
 from utils.logging import get_logger
+from .validation import validate_count, validate_iso_datetime
+from utils.redis_client import get_redis_client
 
 logger = get_logger(__name__)
 
 USER_ID = "00000000-0000-0000-0000-000000000001"
+UNDO_KEY_TEMPLATE = "events:undo:{user_id}"
+UNDO_TTL_SECONDS = 3600
+
+
+def _validate_user(user_id: str) -> Tuple[bool, Optional[str]]:
+    if not user_id:
+        return False, "user_id is required"
+    if user_id != USER_ID:
+        return False, "Unauthorized user_id"
+    return True, None
+
+
+def _validate_ids(event_ids: List[str]) -> Tuple[bool, Optional[str]]:
+    if not event_ids:
+        return False, "event_ids is required"
+    is_valid, error = validate_count(len(event_ids), min_val=1, max_val=200)
+    if not is_valid:
+        return False, error
+    return True, None
+
+
+async def _store_event_snapshot(user_id: str, action: str, events: List[Dict[str, Any]]) -> None:
+    try:
+        redis = await get_redis_client()
+        key = UNDO_KEY_TEMPLATE.format(user_id=user_id)
+        payload = json.dumps({"action": action, "events": events}, default=str)
+        await redis.lpush(key, payload)
+        await redis.ltrim(key, 0, 4)
+        await redis.expire(key, UNDO_TTL_SECONDS)
+    except Exception as e:
+        logger.warning(f"Failed to store event undo snapshot: {e}")
+
+
+async def _pop_event_snapshot(user_id: str) -> Optional[Dict[str, Any]]:
+    redis = await get_redis_client()
+    key = UNDO_KEY_TEMPLATE.format(user_id=user_id)
+    data = await redis.lpop(key)
+    if not data:
+        return None
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError:
+        return None
 
 
 @tool
@@ -38,6 +84,21 @@ async def bulk_create_events(
     Returns:
         Success status and created event IDs
     """
+    is_valid_user, user_error = _validate_user(user_id)
+    if not is_valid_user:
+        return {"success": False, "error": user_error}
+
+    if not events:
+        return {"success": False, "error": "events is required"}
+
+    is_valid_user, user_error = _validate_user(user_id)
+    if not is_valid_user:
+        return {"success": False, "error": user_error}
+
+    is_valid_ids, id_error = _validate_ids(event_ids)
+    if not is_valid_ids:
+        return {"success": False, "error": id_error}
+
     pool = await get_db_pool()
 
     try:
@@ -89,14 +150,15 @@ async def bulk_create_events(
 
     except Exception as e:
         logger.error(f"Error bulk creating events: {e}")
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": "Failed to bulk create events"}
 
 
 @tool
 async def bulk_update_event_status(
     event_ids: List[str],
     new_status: str,
-    user_id: str = USER_ID
+    user_id: str = USER_ID,
+    enable_undo: bool = True
 ) -> Dict[str, Any]:
     """
     Update status for multiple events at once.
@@ -111,6 +173,14 @@ async def bulk_update_event_status(
     Returns:
         Success status and count updated
     """
+    is_valid_user, user_error = _validate_user(user_id)
+    if not is_valid_user:
+        return {"success": False, "error": user_error}
+
+    is_valid_ids, id_error = _validate_ids(event_ids)
+    if not is_valid_ids:
+        return {"success": False, "error": id_error}
+
     if new_status not in ["confirmed", "tentative", "cancelled"]:
         return {"success": False, "error": "Status must be confirmed, tentative, or cancelled"}
 
@@ -118,6 +188,17 @@ async def bulk_update_event_status(
 
     try:
         async with pool.acquire() as conn:
+            if enable_undo:
+                existing = await conn.fetch(
+                    """
+                    SELECT id, status FROM events
+                    WHERE id = ANY($1::uuid[]) AND user_id = $2
+                    """,
+                    event_ids,
+                    user_id
+                )
+                await _store_event_snapshot(user_id, "status", [dict(row) for row in existing])
+
             result = await conn.execute(
                 """
                 UPDATE events
@@ -148,7 +229,8 @@ async def bulk_update_event_status(
 async def bulk_reschedule_events(
     event_ids: List[str],
     time_delta_minutes: int,
-    user_id: str = USER_ID
+    user_id: str = USER_ID,
+    enable_undo: bool = True
 ) -> Dict[str, Any]:
     """
     Shift multiple events by a time delta.
@@ -171,6 +253,18 @@ async def bulk_reschedule_events(
 
     try:
         async with pool.acquire() as conn:
+            if enable_undo:
+                existing = await conn.fetch(
+                    """
+                    SELECT id, start_time, end_time
+                    FROM events
+                    WHERE id = ANY($1::uuid[]) AND user_id = $2
+                    """,
+                    event_ids,
+                    user_id
+                )
+                await _store_event_snapshot(user_id, "reschedule", [dict(row) for row in existing])
+
             result = await conn.execute(
                 """
                 UPDATE events
@@ -208,7 +302,8 @@ async def bulk_reschedule_events(
 async def bulk_add_attendees(
     event_ids: List[str],
     attendees: List[Dict[str, str]],
-    user_id: str = USER_ID
+    user_id: str = USER_ID,
+    enable_undo: bool = True
 ) -> Dict[str, Any]:
     """
     Add attendees to multiple events at once.
@@ -229,22 +324,39 @@ async def bulk_add_attendees(
     Returns:
         Success status and count updated
     """
+    is_valid_user, user_error = _validate_user(user_id)
+    if not is_valid_user:
+        return {"success": False, "error": user_error}
+
+    is_valid_ids, id_error = _validate_ids(event_ids)
+    if not is_valid_ids:
+        return {"success": False, "error": id_error}
+
     pool = await get_db_pool()
 
     try:
         async with pool.acquire() as conn:
-            # Update each event to add attendees
-            count = 0
-            for event_id in event_ids:
-                # Get current attendees
-                current = await conn.fetchval(
-                    "SELECT attendees FROM events WHERE id = $1 AND user_id = $2",
-                    event_id,
+            if enable_undo:
+                existing = await conn.fetch(
+                    "SELECT id, attendees FROM events WHERE id = ANY($1::uuid[]) AND user_id = $2",
+                    event_ids,
                     user_id
                 )
+                await _store_event_snapshot(user_id, "attendees", [dict(row) for row in existing])
 
+            # PERFORMANCE FIX: Batch query instead of N+1
+            # Get all events in one query
+            events = await conn.fetch(
+                "SELECT id, attendees FROM events WHERE id = ANY($1::uuid[]) AND user_id = $2",
+                event_ids,
+                user_id
+            )
+
+            # Build update cases in-memory
+            updates = []
+            for event in events:
                 # Merge attendees (avoid duplicates by email)
-                current_attendees = current or []
+                current_attendees = event["attendees"] or []
                 existing_emails = {a.get("email") for a in current_attendees if isinstance(a, dict)}
 
                 merged_attendees = list(current_attendees)
@@ -252,20 +364,21 @@ async def bulk_add_attendees(
                     if attendee.get("email") not in existing_emails:
                         merged_attendees.append(attendee)
 
-                # Update event
-                result = await conn.execute(
+                updates.append((merged_attendees, event["id"]))
+
+            # Bulk update using prepared statement
+            count = 0
+            if updates:
+                # Use executemany for batch update
+                await conn.executemany(
                     """
                     UPDATE events
                     SET attendees = $1, updated_at = NOW()
                     WHERE id = $2 AND user_id = $3
                     """,
-                    merged_attendees,
-                    event_id,
-                    user_id
+                    [(attendees, event_id, user_id) for attendees, event_id in updates]
                 )
-
-                if result:
-                    count += 1
+                count = len(updates)
 
             logger.info(f"Bulk added attendees to {count} events")
 
@@ -283,7 +396,8 @@ async def bulk_add_attendees(
 @tool
 async def bulk_delete_events(
     event_ids: List[str],
-    user_id: str = USER_ID
+    user_id: str = USER_ID,
+    enable_undo: bool = True
 ) -> Dict[str, Any]:
     """
     Delete multiple events at once.
@@ -298,10 +412,30 @@ async def bulk_delete_events(
     Returns:
         Success status and count deleted
     """
+    is_valid_user, user_error = _validate_user(user_id)
+    if not is_valid_user:
+        return {"success": False, "error": user_error}
+
+    is_valid_ids, id_error = _validate_ids(event_ids)
+    if not is_valid_ids:
+        return {"success": False, "error": id_error}
+
     pool = await get_db_pool()
 
     try:
         async with pool.acquire() as conn:
+            if enable_undo:
+                existing = await conn.fetch(
+                    """
+                    SELECT *
+                    FROM events
+                    WHERE id = ANY($1::uuid[]) AND user_id = $2
+                    """,
+                    event_ids,
+                    user_id
+                )
+                await _store_event_snapshot(user_id, "delete", [dict(row) for row in existing])
+
             result = await conn.execute(
                 "DELETE FROM events WHERE id = ANY($1) AND user_id = $2",
                 event_ids,
@@ -321,3 +455,93 @@ async def bulk_delete_events(
     except Exception as e:
         logger.error(f"Error bulk deleting events: {e}")
         return {"success": False, "error": str(e)}
+
+
+@tool
+async def undo_last_event_action(user_id: str = USER_ID) -> Dict[str, Any]:
+    """
+    Undo the most recent bulk event action (status/reschedule/delete/attendees).
+    """
+    snapshot = await _pop_event_snapshot(user_id)
+    if not snapshot:
+        return {"success": False, "error": "No undo actions available"}
+
+    action = snapshot.get("action")
+    events = snapshot.get("events", [])
+    if not events:
+        return {"success": False, "error": "Undo snapshot empty"}
+
+    pool = await get_db_pool()
+
+    try:
+        async with pool.acquire() as conn:
+            if action == "status":
+                for ev in events:
+                    await conn.execute(
+                        "UPDATE events SET status = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3",
+                        ev.get("status"),
+                        ev.get("id"),
+                        user_id
+                    )
+            elif action == "reschedule":
+                for ev in events:
+                    await conn.execute(
+                        """
+                        UPDATE events
+                        SET start_time = $1, end_time = $2, updated_at = NOW()
+                        WHERE id = $3 AND user_id = $4
+                        """,
+                        ev.get("start_time"),
+                        ev.get("end_time"),
+                        ev.get("id"),
+                        user_id
+                    )
+            elif action == "attendees":
+                for ev in events:
+                    await conn.execute(
+                        """
+                        UPDATE events
+                        SET attendees = $1, updated_at = NOW()
+                        WHERE id = $2 AND user_id = $3
+                        """,
+                        ev.get("attendees"),
+                        ev.get("id"),
+                        user_id
+                    )
+            elif action == "delete":
+                for ev in events:
+                    await conn.execute(
+                        """
+                        INSERT INTO events (
+                            id, user_id, title, description, start_time, end_time,
+                            location, attendees, tags, status, conference_link,
+                            created_at, updated_at
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6,
+                            $7, $8, $9, $10, $11,
+                            $12, $13
+                        )
+                        ON CONFLICT (id) DO NOTHING
+                        """,
+                        ev.get("id"),
+                        user_id,
+                        ev.get("title"),
+                        ev.get("description"),
+                        ev.get("start_time"),
+                        ev.get("end_time"),
+                        ev.get("location"),
+                        ev.get("attendees"),
+                        ev.get("tags"),
+                        ev.get("status", "confirmed"),
+                        ev.get("conference_link"),
+                        ev.get("created_at"),
+                        ev.get("updated_at"),
+                    )
+            else:
+                return {"success": False, "error": f"Unsupported undo action '{action}'"}
+
+        return {"success": True, "restored": len(events), "action": action}
+
+    except Exception as e:
+        logger.error(f"Error undoing event action: {e}", exc_info=True)
+        return {"success": False, "error": "Failed to undo last event action"}

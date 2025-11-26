@@ -9,39 +9,10 @@ Refactored following LangGraph tutorial best practices:
 
 from typing import Dict, Any
 from datetime import datetime
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 from graph.state import MultiAgentState
-from tools import (
-    # Basic task operations
-    search_tasks,
-    create_task,
-    update_task,
-    get_tasks_by_priority,
-    get_tasks_due_soon,
-    # Task dependencies
-    add_task_dependency,
-    get_task_dependencies,
-    get_available_tasks,
-    complete_task_with_unblock,
-    # Task checklists
-    add_checklist_item,
-    check_checklist_item,
-    get_task_with_checklist,
-    get_tasks_with_incomplete_checklists,
-    # Bulk operations
-    bulk_create_tasks,
-    bulk_update_task_status,
-    bulk_add_tags,
-    bulk_set_priority,
-    bulk_delete_tasks,
-    bulk_move_to_project,
-    # Advanced search
-    unified_search,
-    search_by_tags,
-    advanced_task_filter,
-    get_task_statistics,
-)
 from utils.logging import get_logger
+from agents.agent_registry import get_agent_config, get_agent_tools
 from .base import (
     load_system_prompt,
     create_context_message,
@@ -56,40 +27,16 @@ logger = get_logger(__name__)
 # MODULE-LEVEL CONFIGURATION (Created once, reused forever)
 # ============================================================================
 
-# Load system prompt once
-TASK_AGENT_PROMPT = load_system_prompt("task_agent")
-
-# Define tools once (26 tools total including 21 new ones)
-TASK_TOOLS = [
-    # Basic task operations (5 tools)
-    search_tasks,
-    create_task,
-    update_task,
-    get_tasks_by_priority,
-    get_tasks_due_soon,
-    # Task dependencies (4 tools)
-    add_task_dependency,
-    get_task_dependencies,
-    get_available_tasks,
-    complete_task_with_unblock,
-    # Task checklists (4 tools)
-    add_checklist_item,
-    check_checklist_item,
-    get_task_with_checklist,
-    get_tasks_with_incomplete_checklists,
-    # Bulk operations (6 tools)
-    bulk_create_tasks,
-    bulk_update_task_status,
-    bulk_add_tags,
-    bulk_set_priority,
-    bulk_delete_tasks,
-    bulk_move_to_project,
-    # Advanced search (4 tools)
-    unified_search,
-    search_by_tags,
-    advanced_task_filter,
-    get_task_statistics,
-]
+# Load config and resources once
+TASK_AGENT_CONFIG = get_agent_config("task_agent")
+TASK_AGENT_PROMPT = load_system_prompt(
+    "task_agent",
+    prompt_file=TASK_AGENT_CONFIG.prompt_file,
+    partial_files=TASK_AGENT_CONFIG.partials,
+)
+TASK_TOOLS = get_agent_tools("task_agent")
+# Context key drives shared-context map
+TASK_CONTEXT_KEY = TASK_AGENT_CONFIG.context_key
 
 # Create ReAct agent once (following tutorial pattern)
 _task_react_agent = None
@@ -140,10 +87,24 @@ async def task_agent_node(state: MultiAgentState) -> Dict[str, Any]:
         agent = _get_task_agent()
 
         # Create context message (following tutorial pattern)
-        context_message = create_context_message(state, "task", TASK_AGENT_PROMPT)
+        context_message = create_context_message(state, TASK_CONTEXT_KEY, TASK_AGENT_PROMPT)
 
         # Prepend context to messages
         messages_with_context = [context_message] + list(state["messages"])
+
+        # DEBUG: Log the last few user messages to understand what the agent sees
+        logger.info(f"Task Agent message count: {len(state['messages'])}")
+        from langchain_core.messages import HumanMessage
+        user_messages = [m for m in state["messages"] if isinstance(m, HumanMessage)]
+        if user_messages:
+            last_user_msg = user_messages[-1].content if user_messages else "No user messages"
+            logger.info(f"Last user message: {last_user_msg[:200]}...")
+
+        # DEBUG: Log ALL messages being sent to LLM
+        logger.info(f"Messages being sent to LLM ({len(messages_with_context)} total):")
+        for i, msg in enumerate(messages_with_context[:5]):  # First 5 messages
+            msg_preview = str(msg)[:150] if hasattr(msg, '__str__') else str(type(msg))
+            logger.info(f"  Message {i}: {msg_preview}...")
 
         # Invoke agent (simple like tutorial)
         result = await agent.ainvoke(
@@ -166,7 +127,7 @@ async def task_agent_node(state: MultiAgentState) -> Dict[str, Any]:
 
         # Update agent context (consolidated structure)
         agent_contexts = state.get("agent_contexts", {})
-        agent_contexts["task"] = {
+        agent_contexts[TASK_CONTEXT_KEY] = {
             "last_interaction": datetime.utcnow().isoformat(),
             "last_topic": response_content[:200],
         }

@@ -4,14 +4,72 @@ Task dependency management tools.
 Utilizes the existing depends_on and blocks fields in the tasks table.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 from langchain_core.tools import tool
 from utils.db import get_db_pool
 from utils.logging import get_logger
+import asyncpg
 
 logger = get_logger(__name__)
 
 USER_ID = "00000000-0000-0000-0000-000000000001"
+
+
+async def _has_circular_dependency(
+    conn: asyncpg.Connection,
+    task_id: str,
+    new_dependency_id: str
+) -> bool:
+    """
+    Check if adding a dependency would create a circular dependency.
+
+    Uses depth-first search to detect cycles in the dependency graph.
+
+    Args:
+        conn: Database connection
+        task_id: Task that will depend on new_dependency_id
+        new_dependency_id: Task that task_id wants to depend on
+
+    Returns:
+        True if circular dependency would be created, False otherwise
+
+    Example circular dependencies this catches:
+        - Direct: A depends on B, B depends on A
+        - Indirect: A depends on B, B depends on C, C depends on A
+        - Long chain: A→B→C→D→E→A
+    """
+    async def get_dependencies(tid: str) -> List[str]:
+        """Get all dependencies for a task."""
+        result = await conn.fetchval(
+            "SELECT depends_on FROM tasks WHERE id = $1",
+            tid
+        )
+        return result if result else []
+
+    async def has_path(from_id: str, to_id: str, visited: Set[str]) -> bool:
+        """Check if there's a path from from_id to to_id using DFS."""
+        if from_id == to_id:
+            return True
+
+        if from_id in visited:
+            return False
+
+        visited.add(from_id)
+
+        # Get all tasks that from_id depends on
+        dependencies = await get_dependencies(from_id)
+
+        for dep_id in dependencies:
+            if await has_path(str(dep_id), to_id, visited):
+                return True
+
+        return False
+
+    # If new_dependency has a path back to task_id, it's circular
+    # Example: task_id=A wants to depend on B
+    # Check if B has a path to A (B→...→A)
+    # If yes, adding A→B would create a cycle
+    return await has_path(new_dependency_id, task_id, set())
 
 
 @tool
@@ -47,16 +105,11 @@ async def add_task_dependency(
             if len(tasks) != 2:
                 return {"success": False, "error": "One or both tasks not found"}
 
-            # Check for circular dependencies
-            existing_deps = await conn.fetchval(
-                "SELECT depends_on FROM tasks WHERE id = $1",
-                depends_on_task_id
-            )
-
-            if existing_deps and task_id in existing_deps:
+            # Check for circular dependencies using proper graph traversal
+            if await _has_circular_dependency(conn, task_id, depends_on_task_id):
                 return {
                     "success": False,
-                    "error": "Circular dependency detected"
+                    "error": "Circular dependency detected: adding this dependency would create a cycle"
                 }
 
             # Add dependency
@@ -286,28 +339,31 @@ async def complete_task_with_unblock(
             )
 
             # Find newly unblocked tasks
+            # PERFORMANCE FIX: Batch query instead of N+1
             unblocked = []
             if task["blocks"]:
                 # Check which blocked tasks now have all dependencies completed
-                for blocked_id in task["blocks"]:
-                    blocked_task = await conn.fetchrow(
-                        """
-                        SELECT
-                            t.id,
-                            t.title,
-                            t.depends_on,
-                            (
-                                SELECT bool_and(status = 'done')
-                                FROM tasks
-                                WHERE id = ANY(t.depends_on)
-                            ) as all_deps_done
-                        FROM tasks t
-                        WHERE t.id = $1 AND t.status NOT IN ('done', 'cancelled')
-                        """,
-                        blocked_id
-                    )
+                # Single query instead of looping through each blocked task
+                blocked_tasks = await conn.fetch(
+                    """
+                    SELECT
+                        t.id,
+                        t.title,
+                        t.depends_on,
+                        (
+                            SELECT bool_and(status = 'done')
+                            FROM tasks
+                            WHERE id = ANY(t.depends_on)
+                        ) as all_deps_done
+                    FROM tasks t
+                    WHERE t.id = ANY($1::uuid[])
+                      AND t.status NOT IN ('done', 'cancelled')
+                    """,
+                    task["blocks"]
+                )
 
-                    if blocked_task and blocked_task["all_deps_done"]:
+                for blocked_task in blocked_tasks:
+                    if blocked_task["all_deps_done"]:
                         unblocked.append({
                             "id": str(blocked_task["id"]),
                             "title": blocked_task["title"]

@@ -15,20 +15,26 @@ logger = get_logger(__name__)
 USER_ID = "00000000-0000-0000-0000-000000000001"
 
 
-def parse_simple_recurrence(recurrence_pattern: str, count: int = 52) -> List[int]:
+def parse_simple_recurrence(recurrence_pattern: str, count: int = 52, start_date: Optional[datetime] = None) -> List[int]:
     """
     Parse simple recurrence patterns into day offsets.
+
+    Calendar context:
+    - Week starts on Sunday (0)
+    - Weekend days are Friday (5) and Saturday (6)
+    - Business days are Sunday (0) through Thursday (4)
 
     Patterns:
     - "daily" -> every day
     - "weekly" -> every 7 days
-    - "weekdays" -> Mon-Fri
+    - "weekdays" -> Sun-Thu (business days, skip Fri/Sat weekend)
     - "biweekly" -> every 14 days
     - "monthly" -> every 30 days (approximate)
 
     Args:
         recurrence_pattern: Simple pattern string
         count: Number of occurrences to generate
+        start_date: Starting datetime (used to calculate weekday offsets)
 
     Returns:
         List of day offsets from start date
@@ -40,17 +46,23 @@ def parse_simple_recurrence(recurrence_pattern: str, count: int = 52) -> List[in
     elif pattern == "weekly":
         return [i * 7 for i in range(count)]
     elif pattern == "weekdays":
-        # Generate weekday occurrences (skip weekends)
+        # Generate business day occurrences (skip Friday/Saturday weekend)
         offsets = []
-        day = 0
+        current_offset = 0
+
+        # Determine starting weekday (0=Sunday, 6=Saturday)
+        if start_date:
+            start_weekday = (start_date.weekday() + 1) % 7  # Convert Mon=0 to Sun=0
+        else:
+            start_weekday = 0  # Assume Sunday if not provided
+
         while len(offsets) < count:
-            # Day 0 is the start, check what day of week it would be
-            # For simplicity, we'll include all and let the date calculation handle it
-            offsets.append(day)
-            day += 1
-            # Skip weekends (very simplified - assumes start is a weekday)
-            if (day % 7) in [5, 6]:  # Sat, Sun (0-indexed from start)
-                day += 2
+            current_weekday = (start_weekday + current_offset) % 7
+            # Business days: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu (skip 5=Fri, 6=Sat)
+            if current_weekday not in [5, 6]:  # Not Friday or Saturday
+                offsets.append(current_offset)
+            current_offset += 1
+
         return offsets[:count]
     elif pattern == "biweekly":
         return [i * 14 for i in range(count)]
@@ -58,6 +70,7 @@ def parse_simple_recurrence(recurrence_pattern: str, count: int = 52) -> List[in
         return [i * 30 for i in range(count)]  # Approximate
     else:
         # Default to weekly if unknown
+        logger.warning(f"Unknown recurrence pattern: {recurrence_pattern}, defaulting to weekly")
         return [i * 7 for i in range(count)]
 
 
@@ -108,8 +121,8 @@ async def create_recurring_event(
         end_dt = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
         duration = end_dt - start_dt
 
-        # Get day offsets based on pattern
-        day_offsets = parse_simple_recurrence(recurrence_pattern, occurrence_count)
+        # Get day offsets based on pattern (pass start_dt for accurate weekday calculation)
+        day_offsets = parse_simple_recurrence(recurrence_pattern, occurrence_count, start_dt)
 
         async with pool.acquire() as conn:
             # Create parent event (first occurrence)

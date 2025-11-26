@@ -7,5 +7,6 @@ from .vault import router as vault_router
 from .documents import router as documents_router
 from .memory import router as memory_router
 from .imports import router as imports_router
+from .chat_stream import router as chat_stream_router
 
-__all__ = ["tasks_router", "reminders_router", "events_router", "vault_router", "documents_router", "memory_router", "imports_router"]
+__all__ = ["tasks_router", "reminders_router", "events_router", "vault_router", "documents_router", "memory_router", "imports_router", "chat_stream_router"]

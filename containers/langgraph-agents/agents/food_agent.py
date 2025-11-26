@@ -9,18 +9,10 @@ Refactored following LangGraph tutorial best practices:
 
 from typing import Dict, Any
 from datetime import datetime
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 from graph.state import MultiAgentState
-from tools import (
-    search_food_log,
-    log_food_entry,
-    update_food_entry,
-    get_food_by_rating,
-    analyze_food_patterns,
-    vector_search_foods,
-    get_food_recommendations,
-)
 from utils.logging import get_logger
+from agents.agent_registry import get_agent_config, get_agent_tools
 from .base import (
     load_system_prompt,
     create_context_message,
@@ -35,19 +27,14 @@ logger = get_logger(__name__)
 # MODULE-LEVEL CONFIGURATION (Created once, reused forever)
 # ============================================================================
 
-# Load system prompt once
-FOOD_AGENT_PROMPT = load_system_prompt("food_agent")
-
-# Define tools once
-FOOD_TOOLS = [
-    search_food_log,
-    log_food_entry,
-    update_food_entry,
-    get_food_by_rating,
-    analyze_food_patterns,
-    vector_search_foods,
-    get_food_recommendations,
-]
+FOOD_AGENT_CONFIG = get_agent_config("food_agent")
+FOOD_AGENT_PROMPT = load_system_prompt(
+    "food_agent",
+    prompt_file=FOOD_AGENT_CONFIG.prompt_file,
+    partial_files=FOOD_AGENT_CONFIG.partials,
+)
+FOOD_TOOLS = get_agent_tools("food_agent")
+FOOD_CONTEXT_KEY = FOOD_AGENT_CONFIG.context_key
 
 # Create ReAct agent once (following tutorial pattern)
 _food_react_agent = None
@@ -98,7 +85,7 @@ async def food_agent_node(state: MultiAgentState) -> Dict[str, Any]:
         agent = _get_food_agent()
 
         # Create context message (following tutorial pattern)
-        context_message = create_context_message(state, "food", FOOD_AGENT_PROMPT)
+        context_message = create_context_message(state, FOOD_CONTEXT_KEY, FOOD_AGENT_PROMPT)
 
         # Prepend context to messages
         messages_with_context = [context_message] + list(state["messages"])
@@ -124,7 +111,7 @@ async def food_agent_node(state: MultiAgentState) -> Dict[str, Any]:
 
         # Update agent context (consolidated structure)
         agent_contexts = state.get("agent_contexts", {})
-        agent_contexts["food"] = {
+        agent_contexts[FOOD_CONTEXT_KEY] = {
             "last_interaction": datetime.utcnow().isoformat(),
             "last_topic": response_content[:200],
         }

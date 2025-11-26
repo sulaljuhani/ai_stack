@@ -36,6 +36,8 @@ from .documents import (
 from .memory import (
     store_chat_turn,
     search_memories,
+    memory_health,
+    find_duplicate_memories,
 )
 
 # NEW: Task dependencies (from Atlas inspiration)
@@ -79,6 +81,7 @@ from .event_bulk_operations import (
     bulk_reschedule_events,
     bulk_add_attendees,
     bulk_delete_events,
+    undo_last_event_action,
 )
 
 # Event recurring
@@ -104,6 +107,7 @@ from .event_scheduling import (
     suggest_meeting_times,
     bulk_check_conflicts,
     get_busy_free_times,
+    smart_schedule_day,
 )
 
 # Reminder tools
@@ -116,6 +120,30 @@ from .reminders import (
     get_reminders_due_soon,
 )
 
+# Reminder bulk operations + undo
+from .reminder_bulk_operations import (
+    bulk_update_reminder_status,
+    bulk_snooze_reminders,
+    bulk_delete_reminders,
+    undo_last_reminder_action,
+)
+
+# Quick win tools
+from .quick_wins import (
+    get_task_summary,
+    suggest_next_task,
+    time_block_planning,
+)
+
+# Analytics & insights
+from .analytics import (
+    task_insights,
+    reminder_insights,
+    event_insights,
+)
+
+# Integration status
+from .integrations import integration_status
 __all__ = [
     # Database - Food
     "search_food_log",
@@ -147,6 +175,8 @@ __all__ = [
     # Memory
     "store_chat_turn",
     "search_memories",
+    "memory_health",
+    "find_duplicate_memories",
     # NEW: Task Dependencies
     "add_task_dependency",
     "get_task_dependencies",
@@ -175,6 +205,7 @@ __all__ = [
     "bulk_reschedule_events",
     "bulk_add_attendees",
     "bulk_delete_events",
+    "undo_last_event_action",
     # Event recurring
     "create_recurring_event",
     "update_recurring_series",
@@ -191,6 +222,7 @@ __all__ = [
     "suggest_meeting_times",
     "bulk_check_conflicts",
     "get_busy_free_times",
+    "smart_schedule_day",
     # Reminders
     "search_reminders",
     "create_reminder",
@@ -198,4 +230,16 @@ __all__ = [
     "complete_reminder",
     "get_reminders_today",
     "get_reminders_due_soon",
+    "bulk_update_reminder_status",
+    "bulk_snooze_reminders",
+    "bulk_delete_reminders",
+    "undo_last_reminder_action",
+    # Quick wins
+    "get_task_summary",
+    "suggest_next_task",
+    "time_block_planning",
+    "task_insights",
+    "reminder_insights",
+    "event_insights",
+    "integration_status",
 ]

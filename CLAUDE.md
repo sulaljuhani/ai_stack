@@ -10,8 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Key Facts:**
 - **Status:** Production Ready (Security audited, all critical issues resolved)
-- **Architecture:** Multi-agent LangGraph system with FastAPI backend
-- **Recent Change:** Migrated from n8n workflows to native Python (Nov 2025)
+- **Architecture:** Config-driven LangGraph multi-agent system (5 agents) with FastAPI backend
+- **Recent Change:** Migrated from n8n workflows to native Python (Nov 2025); agent/tool registry + event bus added for modularity
 - **Deployment:** 8 Docker containers on shared bridge network
 - **Privacy:** 100% local, no cloud dependencies
 
@@ -97,9 +97,11 @@ User Interfaces (OpenWebUI adapter/pipe, API; AnythingLLM archived)
 LangGraph Multi-Agent System (FastAPI)
     ├── Food Agent
     ├── Task Agent
-    └── Event Agent
+    ├── Event Agent
+    ├── Reminder Agent
+    └── Knowledge Agent
            ↓
-    Tool Layer (30+ tools)
+    Tool Layer (registry + ToolRunner, 30+ tools)
     ├── Database (asyncpg)
     ├── Vector (Qdrant)
     ├── Memory (OpenMemory)
@@ -115,13 +117,15 @@ External Services (Ollama, OpenMemory)
 
 **LangGraph Agents** (`/containers/langgraph-agents/`)
 - **main.py** - FastAPI application entry point
-- **config.py** - Pydantic settings (all environment variables)
+- **config.py** - Pydantic settings accessor (all environment variables)
+- **config/agents.yaml** - Declares agents, prompts, keywords, toolkits
 - **routers/** - 21 REST API endpoints organized by domain
 - **services/** - 10 scheduled background jobs (APScheduler)
-- **tools/** - 30+ agent tools (database, vector, hybrid, memory)
+- **tools/** - 30+ agent tools (database, vector, hybrid, memory) plus `tool_registry.py`
 - **graph/** - LangGraph workflow, state, routing, checkpointing
-- **agents/** - Specialized agents (food, task, event)
+- **agents/** - Specialized agents (food, task, event, reminder, knowledge) + `agent_registry.py`
 - **prompts/** - System prompts for each agent
+- **utils/event_bus.py** - Lightweight pub/sub for tool events feeding metrics
 
 **MCP Server** (`/containers/mcp-server/`)
 - **server.py** - Model Context Protocol server (12 database tools for Claude Desktop)
@@ -164,13 +168,14 @@ External Services (Ollama, OpenMemory)
 │   ├── langgraph-agents/          # ⭐ MAIN APPLICATION
 │   │   ├── main.py                # FastAPI entry point
 │   │   ├── config.py              # Environment configuration
+│   │   ├── config/agents.yaml     # Agent registry config (prompts/keywords/tools)
 │   │   ├── routers/               # REST endpoints (21)
 │   │   ├── services/              # Background jobs (10)
-│   │   ├── tools/                 # Agent tools (30+)
-│   │   ├── graph/                 # LangGraph workflow
-│   │   ├── agents/                # Specialized agents (3)
+│   │   ├── tools/                 # Agent tools (30+) + registry/wrappers
+│   │   ├── graph/                 # LangGraph workflow (registry-driven)
+│   │   ├── agents/                # Specialized agents (5) + registry
 │   │   ├── prompts/               # System prompts
-│   │   └── utils/                 # Shared utilities
+│   │   └── utils/                 # Shared utilities (logging, metrics, event bus)
 │   └── mcp-server/                # MCP server (12 tools)
 ├── migrations/                     # SQL schema (10 files)
 ├── scripts/                        # Utilities & maintenance
@@ -193,10 +198,18 @@ External Services (Ollama, OpenMemory)
 Request → Hybrid Router → Agent Selection → Tool Execution → Response
 ```
 
-**Agents:**
+**Agents (config-driven via `config/agents.yaml`):**
 - **Food Agent** - Food logging specialist
 - **Task Agent** - Task management specialist
 - **Event Agent** - Calendar specialist
+- **Reminder Agent** - Reminders, snoozes, bulk undo
+- **Knowledge Agent** - Memory/doc search and vault ops
+
+**Registries & Observability:**
+- **Agent Registry** builds prompts/toolkits from YAML; routing/workflow pull from it.
+- **Tool Registry + ToolRunner** wrap tools with shared metrics/events and normalize outputs into a common envelope (success/message/count/items/meta).
+- **Event Bus** emits `tool.called/succeeded/failed` to feed metrics counters.
+- **Feature switches**: `enabled` and `exclude_tools` in agents.yaml; keywords have optional weights for routing bias; prompts can add shared partials (`prompts/partials/*`).
 
 **State Management:**
 - Messages pruned to last 20 (prevents memory bloat)
