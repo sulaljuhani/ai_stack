@@ -144,6 +144,11 @@ from .analytics import (
 
 # Integration status
 from .integrations import integration_status
+from .todoist_mirror import (
+    get_todoist_project_tree,
+    get_todoist_labels,
+    get_todoist_task_tree,
+)
 __all__ = [
     # Database - Food
     "search_food_log",
@@ -242,4 +247,7 @@ __all__ = [
     "reminder_insights",
     "event_insights",
     "integration_status",
+    "get_todoist_project_tree",
+    "get_todoist_labels",
+    "get_todoist_task_tree",
 ]

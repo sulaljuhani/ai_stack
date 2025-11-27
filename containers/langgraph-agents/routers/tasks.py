@@ -7,8 +7,9 @@ Replaces n8n workflow: 02-create-task.json
 
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+import os
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from pydantic import BaseModel, Field
 
 from middleware.validation import (
     CreateTaskRequest,
@@ -20,6 +21,7 @@ from middleware.validation import (
 )
 from utils.db import get_db_pool
 from utils.logging import get_logger
+from services.todoist_sync import TodoistSyncService
 
 logger = get_logger(__name__)
 DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
@@ -50,6 +52,19 @@ class TaskListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class QuickAddRequest(BaseModel):
+    """Request model for quick add using Todoist NLP"""
+    text: str = Field(..., description="Natural language task description", min_length=1)
+
+
+class SubtaskRequest(BaseModel):
+    """Request model for creating a subtask"""
+    parent_id: str = Field(..., description="Todoist ID of the parent task")
+    content: str = Field(..., description="Subtask title/content", min_length=1)
+    description: str = Field(default="", description="Optional description")
+    priority: int = Field(default=1, ge=1, le=4, description="Priority 1-4")
 
 
 # ============================================================================
@@ -487,3 +502,136 @@ async def delete_task(task_id: str):
     except Exception as e:
         logger.error(f"Error deleting task {task_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete task: {str(e)}")
+
+
+# ============================================================================
+# TODOIST NLP Integration
+# ============================================================================
+
+@router.post("/quick_add")
+async def quick_add_task(
+    request: QuickAddRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    Create a task using Todoist's natural language parser.
+
+    This endpoint leverages Todoist's NLP to understand complex task descriptions:
+    - Dates: "tomorrow", "next monday", "jan 23"
+    - Times: "at 3pm", "at 14:00"
+    - Projects: "#ProjectName"
+    - Labels: "@label_name"
+    - Priority: "p1", "p2", "p3", "p4"
+    - Recurring: "every monday", "every week"
+
+    Examples:
+        - "Buy milk tomorrow #Groceries"
+        - "Meeting with John at 3pm p1"
+        - "Call mom every monday @phone"
+
+    The task is created in Todoist and immediately synced to the local database.
+    A background sync is triggered to ensure consistency.
+
+    Returns:
+        Dict with success status and created task details
+    """
+    # Check if Todoist is configured
+    api_token = os.getenv("TODOIST_API_TOKEN") or os.getenv("TODOIST_API_KEY")
+    if not api_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Todoist integration not configured (TODOIST_API_TOKEN missing)"
+        )
+
+    try:
+        pool = await get_db_pool()
+        service = TodoistSyncService(api_token, pool)
+
+        # Create task using Todoist NLP
+        result = await service.quick_add(request.text)
+
+        if not result.get("success"):
+            error_msg = result.get("error", "Unknown error")
+            logger.error(f"Quick add failed: {error_msg}")
+            raise HTTPException(status_code=400, detail=error_msg)
+
+        # Schedule incremental sync in background to pull any changes
+        background_tasks.add_task(service.sync, force_full=False)
+
+        logger.info(f"Quick add successful: {result['task'].get('content')}")
+
+        return {
+            "success": True,
+            "task": result["task"],
+            "message": "Task created using Todoist NLP"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in quick_add: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to create task: {str(e)}")
+
+
+@router.post("/subtask")
+async def create_subtask(
+    request: SubtaskRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    Create a subtask under a specific parent task.
+
+    This endpoint creates a hierarchical relationship between tasks using
+    Todoist's parent_id field. The subtask will appear nested under the
+    parent in the UI.
+
+    Args:
+        parent_id: Todoist ID of the parent task
+        content: Subtask title/content
+        description: Optional description
+        priority: Priority 1-4 (1=normal, 4=urgent)
+
+    Returns:
+        Dict with success status and created subtask details
+    """
+    # Check if Todoist is configured
+    api_token = os.getenv("TODOIST_API_TOKEN") or os.getenv("TODOIST_API_KEY")
+    if not api_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Todoist integration not configured (TODOIST_API_TOKEN missing)"
+        )
+
+    try:
+        pool = await get_db_pool()
+        service = TodoistSyncService(api_token, pool)
+
+        # Create subtask
+        result = await service.create_subtask(
+            parent_id=request.parent_id,
+            content=request.content,
+            description=request.description,
+            priority=request.priority
+        )
+
+        if not result.get("success"):
+            error_msg = result.get("error", "Unknown error")
+            logger.error(f"Subtask creation failed: {error_msg}")
+            raise HTTPException(status_code=400, detail=error_msg)
+
+        # Schedule incremental sync in background
+        background_tasks.add_task(service.sync, force_full=False)
+
+        logger.info(f"Subtask created: {result['task'].get('content')} under {request.parent_id}")
+
+        return {
+            "success": True,
+            "task": result["task"],
+            "message": "Subtask created successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in create_subtask: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to create subtask: {str(e)}")

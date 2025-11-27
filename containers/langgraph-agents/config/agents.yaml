@@ -162,3 +162,60 @@ agents:
       - save this
       - summary note
     description: Captures and appends notes to the vault and triggers embeddings.
+
+  - name: recorder_agent
+    enabled: true
+    context_key: recorder
+    prompt_file: prompts/recorder_agent.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:life_logging
+      - tag:food_core
+      - tag:memory_context
+    exclude_tools: []
+    keywords:
+      - term: log
+        weight: 1.5
+      - record
+      - track
+      - period
+      - menstrual
+      - cycle
+      - sex
+      - intimate
+      - haircut
+      - doctor
+      - dentist
+      - spent
+      - cost
+      - purchase
+    description: Logs life events, health data, cycles, and miscellaneous expenses.
+
+  - name: analyst_agent
+    enabled: true
+    context_key: analyst
+    prompt_file: prompts/analyst_agent.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:reporting
+      - tag:memory_context
+    exclude_tools: []
+    keywords:
+      - term: analyze
+        weight: 1.5
+      - analysis
+      - report
+      - chart
+      - graph
+      - trend
+      - correlation
+      - how many
+      - how much
+      - statistics
+      - stats
+      - summary of data
+    description: Analyzes data, runs reports, and answers complex questions about logged history.

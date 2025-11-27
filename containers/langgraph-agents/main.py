@@ -26,7 +26,18 @@ from utils.db import close_db_pool
 from utils.redis_client import close_redis_client
 from services.scheduler import setup_scheduler, shutdown_scheduler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from routers import tasks_router, reminders_router, events_router, vault_router, documents_router, memory_router, imports_router, chat_stream_router
+from routers import (
+    tasks_router,
+    reminders_router,
+    events_router,
+    vault_router,
+    documents_router,
+    memory_router,
+    imports_router,
+    chat_stream_router,
+    todoist_webhook_router,
+    todoist_mirror_router,
+)
 from utils.metrics import get_metrics_snapshot
 
 # Setup logging
@@ -171,6 +182,8 @@ async def custom_validation_exception_handler(request: Request, exc: RequestVali
 app.include_router(tasks_router)
 app.include_router(reminders_router)
 app.include_router(events_router)
+app.include_router(todoist_webhook_router)
+app.include_router(todoist_mirror_router)
 
 # Include routers for vault & document management (replaces n8n workflows 07, 15, 18)
 app.include_router(vault_router)

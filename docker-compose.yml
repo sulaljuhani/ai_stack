@@ -70,31 +70,6 @@ services:
       retries: 3
 
   # ===========================================================================
-  # AI Stack Web UI - Custom Chat Interface
-  # ===========================================================================
-  ai-stack-webui:
-    build:
-      context: ./web/app
-      dockerfile: Dockerfile
-    container_name: ai-stack-webui
-    restart: unless-stopped
-    environment:
-      # Backend API URL (internal Docker network)
-      PUBLIC_BACKEND_URL: http://langgraph-agents:8000
-    ports:
-      - "${WEBUI_PORT:-3000}:80"
-    networks:
-      - ai-stack-network
-    depends_on:
-      - langgraph-agents
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-
-  # ===========================================================================
   # Open-WebUI Adapter (OpenAI-style shim to LangGraph)
   # ===========================================================================
   openwebui-adapter:
@@ -116,6 +91,39 @@ services:
       - ai-stack-network
     depends_on:
       - langgraph-agents
+
+  # ===========================================================================
+  # NocoDB - No-code Database Admin
+  # ===========================================================================
+  nocodb:
+    image: nocodb/nocodb:latest
+    container_name: nocodb-ai-stack
+    restart: unless-stopped
+    environment:
+      NC_DB: "pg://${POSTGRES_HOST}:${POSTGRES_PORT}?u=${POSTGRES_USER}&p=${POSTGRES_PASSWORD}&d=${POSTGRES_DB}"
+    ports:
+      - "8083:8080"
+    networks:
+      - ai-stack-network
+
+  # ===========================================================================
+  # Metabase - Visualization
+  # ===========================================================================
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase-ai-stack
+    restart: unless-stopped
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase_app_db
+      MB_DB_PORT: ${POSTGRES_PORT}
+      MB_DB_USER: ${POSTGRES_USER}
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
+      MB_DB_HOST: ${POSTGRES_HOST}
+    ports:
+      - "3002:3000"
+    networks:
+      - ai-stack-network
 
 networks:
   ai-stack-network:

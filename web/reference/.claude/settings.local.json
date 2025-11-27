@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run dev:*)",
+      "Bash(npm install:*)",
+      "Bash(chmod:*)",
+      "Bash(/mnt/user/appdata/ai_stack/web/app/start-dev.sh)",
+      "Bash(curl:*)",
+      "Bash(python main.py:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

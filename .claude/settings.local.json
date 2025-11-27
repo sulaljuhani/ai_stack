@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker logs:*)",
+      "Bash(docker start:*)",
+      "Bash(docker exec:*)",
+      "Bash(curl:*)",
+      "Bash(xargs basename:*)",
+      "Bash([ -f .env ])",
+      "Bash(cat:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker restart:*)",
+      "Bash(time curl:*)",
+      "Bash(npm run dev:*)",
+      "Bash(docker stats:*)",
+      "Bash(docker-compose down:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker-compose stop:*)",
+      "Bash(docker-compose rm:*)",
+      "Bash(docker compose stop:*)",
+      "Bash(docker compose rm:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker stop:*)",
+      "Bash(docker rm:*)",
+      "Bash(docker inspect:*)",
+      "Bash(pkill:*)",
+      "Bash(openssl rand:*)",
+      "Skill(frontend-design)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

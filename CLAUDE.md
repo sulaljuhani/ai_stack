@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Deployment:** 8 Docker containers on shared bridge network
 - **Privacy:** 100% local, no cloud dependencies
 
-**Current UI note:** The custom React frontend and AnythingLLM pieces are archived under `archive/`; active chat UI is OpenWebUI via the adapter/pipe.
+**Current UI note:** The custom React frontend and AnythingLLM pieces are archived under `archive/`; active chat UI is a custom Open WebUI fork located at `/mnt/user/appdata/open-webui-sebastian` with extended productivity features (Tasks, Calendar, Events, Reminders, Life Analytics).
 
 ---
 
@@ -73,11 +73,29 @@ python main.py
 
 ## OpenWebUI Integration (current)
 
-- UI endpoint: `http://192.168.0.12:8084/` (Workspace → Functions).
-- Pipe Function (recommended for continuity): `openwebui/langgraph_pipe_FIXED.py` uses chat_id as session_id, single-user ID `00000000-0000-0000-0000-000000000001`, model name "Sebastian". In OpenWebUI create a Pipe Function, paste the file, set valves `LANGGRAPH_CHAT_URL=http://langgraph-agents:8000/chat`, `LANGGRAPH_WORKSPACE=default`, optional `LANGGRAPH_API_KEY`, and enable it.
-- Adapter service: `openwebui-adapter` in `docker-compose.yml` forwards OpenAI-style calls to `http://langgraph-agents:8000/chat`. Host port `${OPENWEBUI_ADAPTER_PORT:-8090}` → container `8080` on `ai-stack-network`.
-- Adapter auth: env var `OPENWEBUI_ADAPTER_API_KEY` (compose default `change_me`). Local override for manual runs lives in `openwebui/adapter/.env` with key `9f02cb1950dc88965cf96358049a2b8551a4cc6a6c56ba19ecd54a8d2579ad0f` and `PORT=8090`.
-- Quick adapter probe:
+### Custom Frontend Fork
+
+**Location:** `/mnt/user/appdata/open-webui-sebastian`
+
+This is a custom fork of Open WebUI v0.6.38 with **5 additional productivity pages** that integrate directly with the LangGraph backend:
+
+1. **Tasks** (`/tasks`) - Todoist integration with hierarchical task management
+2. **Calendar** (`/calendar`) - Monthly calendar view with event visualization
+3. **Events** (`/events`) - Detailed list view of scheduled events
+4. **Reminders** (`/reminders`) - Time-sensitive notifications with priority management
+5. **Life** (`/life`) - Analytics dashboard embedded via Metabase
+
+All custom pages connect to this backend at `http://langgraph-agents:8000` and use the same API endpoints documented below.
+
+See `/mnt/user/appdata/open-webui-sebastian/CLAUDE.md` for detailed frontend documentation.
+
+### Backend Integration
+
+- **UI endpoint:** `http://192.168.0.12:8084/` (Workspace → Functions)
+- **Pipe Function (recommended):** `openwebui/langgraph_pipe_FIXED.py` uses chat_id as session_id, single-user ID `00000000-0000-0000-0000-000000000001`, model name "Sebastian". In OpenWebUI create a Pipe Function, paste the file, set valves `LANGGRAPH_CHAT_URL=http://langgraph-agents:8000/chat`, `LANGGRAPH_WORKSPACE=default`, optional `LANGGRAPH_API_KEY`, and enable it.
+- **Adapter service:** `openwebui-adapter` in `docker-compose.yml` forwards OpenAI-style calls to `http://langgraph-agents:8000/chat`. Host port `${OPENWEBUI_ADAPTER_PORT:-8090}` → container `8080` on `ai-stack-network`.
+- **Adapter auth:** env var `OPENWEBUI_ADAPTER_API_KEY` (compose default `change_me`). Local override for manual runs lives in `openwebui/adapter/.env` with key `9f02cb1950dc88965cf96358049a2b8551a4cc6a6c56ba19ecd54a8d2579ad0f` and `PORT=8090`.
+- **Quick adapter probe:**
   ```bash
   curl -X POST http://localhost:8090/v1/chat/completions \
     -H "Authorization: Bearer <adapter_key>" \

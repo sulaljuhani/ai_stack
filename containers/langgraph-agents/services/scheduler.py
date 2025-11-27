@@ -94,7 +94,8 @@ def setup_scheduler(scheduler: AsyncIOScheduler) -> None:
     from services.maintenance import cleanup_old_data, health_check
     from services.vault_sync import scheduled_vault_sync, watch_vault_changes
     from services.memory_service import enrich_memories, sync_memory_to_vault
-    from services.external_sync import sync_todoist, sync_google_calendar
+    from services.todoist_sync import sync_todoist
+    from services.external_sync import sync_google_calendar
     import os
 
     # Job 1: Fire Reminders - every 5 minutes

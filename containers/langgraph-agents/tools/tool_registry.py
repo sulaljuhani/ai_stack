@@ -35,6 +35,9 @@ from . import quick_wins
 from . import analytics
 from . import integrations
 from . import note_files
+from . import life_logging
+from . import reporting
+from . import todoist_mirror
 
 logger = get_logger(__name__)
 
@@ -178,6 +181,13 @@ def _register_all_tools() -> None:
     register_tool("update_task", database.update_task, ["tasks_core", "tasks", "db"])
     register_tool("get_tasks_by_priority", database.get_tasks_by_priority, ["tasks_core", "tasks", "db"])
     register_tool("get_tasks_due_soon", database.get_tasks_due_soon, ["tasks_core", "tasks", "db"])
+
+    # Todoist Integration (NLP + Mirror)
+    register_tool("add_task_with_nlp", todoist_mirror.add_task_with_nlp, ["tasks_core", "tasks", "todoist", "nlp"])
+    register_tool("add_subtask", todoist_mirror.add_subtask, ["tasks_core", "tasks", "todoist"])
+    register_tool("get_todoist_project_tree", todoist_mirror.get_todoist_project_tree, ["tasks_todoist", "todoist", "tasks"])
+    register_tool("get_todoist_labels", todoist_mirror.get_todoist_labels, ["tasks_todoist", "todoist", "tasks"])
+    register_tool("get_todoist_task_tree", todoist_mirror.get_todoist_task_tree, ["tasks_todoist", "todoist", "tasks"])
     register_tool("add_task_dependency", task_dependencies.add_task_dependency, ["tasks_dependencies", "tasks"])
     register_tool("get_task_dependencies", task_dependencies.get_task_dependencies, ["tasks_dependencies", "tasks"])
     register_tool("get_available_tasks", task_dependencies.get_available_tasks, ["tasks_dependencies", "tasks"])
@@ -260,6 +270,15 @@ def _register_all_tools() -> None:
 
     # Shared / integration
     register_tool("integration_status", integrations.integration_status, ["integrations"])
+
+    # Life Logging (Recorder)
+    register_tool("log_menstrual_cycle", life_logging.log_menstrual_cycle, ["life_logging", "recorder"])
+    register_tool("log_intimate_activity", life_logging.log_intimate_activity, ["life_logging", "recorder"])
+    register_tool("log_misc_event", life_logging.log_misc_event, ["life_logging", "recorder"])
+
+    # Reporting (Analyst)
+    register_tool("run_read_only_sql", reporting.run_read_only_sql, ["reporting", "analyst"])
+    register_tool("get_table_schema", reporting.get_table_schema, ["reporting", "analyst"])
 
 
 _register_all_tools()

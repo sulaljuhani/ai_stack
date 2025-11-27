@@ -5,7 +5,8 @@ from .reminders import fire_reminders, generate_daily_summary, expand_recurring_
 from .maintenance import cleanup_old_data, health_check
 from .vault_sync import scheduled_vault_sync
 from .memory_service import enrich_memories, sync_memory_to_vault
-from .external_sync import sync_todoist, sync_google_calendar
+from .todoist_sync import sync_todoist
+from .external_sync import sync_google_calendar
 
 __all__ = [
     "setup_scheduler",
