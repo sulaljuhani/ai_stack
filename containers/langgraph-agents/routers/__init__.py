@@ -10,6 +10,7 @@ from .imports import router as imports_router
 from .chat_stream import router as chat_stream_router
 from .todoist_webhooks import router as todoist_webhook_router
 from .todoist_mirror import router as todoist_mirror_router
+from .todoist_actions import router as todoist_actions_router
 
 __all__ = [
     "tasks_router",
@@ -22,4 +23,5 @@ __all__ = [
     "chat_stream_router",
     "todoist_webhook_router",
     "todoist_mirror_router",
+    "todoist_actions_router",
 ]

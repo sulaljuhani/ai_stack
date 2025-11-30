@@ -4,6 +4,8 @@ services:
   langgraph-agents:
     build: .
     container_name: langgraph-agents
+    env_file:
+      - ../../.env
     ports:
       - "8000:8000"
     environment:
@@ -51,24 +53,22 @@ services:
     depends_on:
       - redis
     networks:
-      - ai-assistant
+      - ai-stack-network
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     container_name: langgraph-redis
-    ports:
-      - "6379:6379"
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes
     networks:
-      - ai-assistant
+      - ai-stack-network
     restart: unless-stopped
 
 volumes:
   redis-data:
 
 networks:
-  ai-assistant:
+  ai-stack-network:
     external: true

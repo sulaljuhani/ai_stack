@@ -11,7 +11,9 @@ from langchain_core.tools import tool
 from utils.db import get_db_pool
 from utils.logging import get_logger
 from .validation import validate_count, validate_iso_datetime
+from .database import normalize_due_date
 from utils.redis_client import get_redis_client
+from services.google_calendar_sync import GoogleCalendarSyncService
 
 logger = get_logger(__name__)
 
@@ -395,7 +397,9 @@ async def bulk_add_attendees(
 
 @tool
 async def bulk_delete_events(
-    event_ids: List[str],
+    event_ids: Optional[List[str]] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     user_id: str = USER_ID,
     enable_undo: bool = True
 ) -> Dict[str, Any]:
@@ -416,24 +420,71 @@ async def bulk_delete_events(
     if not is_valid_user:
         return {"success": False, "error": user_error}
 
-    is_valid_ids, id_error = _validate_ids(event_ids)
-    if not is_valid_ids:
-        return {"success": False, "error": id_error}
+    if not event_ids and not start_date and not end_date:
+        return {"success": False, "error": "Provide event_ids or a date range"}
+
+    def _normalize_dt(value: Optional[str | datetime]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=None)
+        parsed = normalize_due_date(value)
+        return parsed.replace(tzinfo=None) if parsed else None
 
     pool = await get_db_pool()
 
     try:
         async with pool.acquire() as conn:
+            where_clauses = ["user_id = $1"]
+            params = [user_id]
+            param_count = 1
+
+            start_dt = _normalize_dt(start_date)
+            end_dt = _normalize_dt(end_date)
+
+            if event_ids:
+                param_count += 1
+                params.append(event_ids)
+                where_clauses.append(f"id = ANY(${param_count}::uuid[])")
+
+            if start_dt:
+                param_count += 1
+                params.append(start_dt)
+                where_clauses.append(f"start_time >= ${param_count}")
+
+            if end_dt:
+                param_count += 1
+                params.append(end_dt)
+                where_clauses.append(f"end_time <= ${param_count}")
+
+            where_sql = " AND ".join(where_clauses)
+
+            existing = await conn.fetch(
+                f"""
+                SELECT *
+                FROM events
+                WHERE {where_sql}
+                """,
+                *params
+            )
+            event_ids = [str(row["id"]) for row in existing]
+            google_events = [
+                {
+                    "google_event_id": row.get("google_event_id"),
+                    "google_calendar_id": row.get("google_calendar_id") or "primary",
+                }
+                for row in existing
+                if row.get("google_event_id")
+            ]
+
+            if not event_ids:
+                return {"success": False, "error": "No events matched the provided criteria"}
+
+            is_valid_ids, id_error = _validate_ids(event_ids)
+            if not is_valid_ids:
+                return {"success": False, "error": id_error}
+
             if enable_undo:
-                existing = await conn.fetch(
-                    """
-                    SELECT *
-                    FROM events
-                    WHERE id = ANY($1::uuid[]) AND user_id = $2
-                    """,
-                    event_ids,
-                    user_id
-                )
                 await _store_event_snapshot(user_id, "delete", [dict(row) for row in existing])
 
             result = await conn.execute(
@@ -443,12 +494,31 @@ async def bulk_delete_events(
             )
 
             count = int(result.split()[-1]) if result else 0
+            google_deleted = 0
+
+            # Propagate deletions to Google Calendar so they don't reappear on next sync
+            try:
+                google_service = GoogleCalendarSyncService(pool)
+                if google_service.service and google_events:
+                    for ge in google_events:
+                        try:
+                            google_service.service.events().delete(
+                                calendarId=ge["google_calendar_id"],
+                                eventId=ge["google_event_id"],
+                                sendUpdates='all'
+                            ).execute()
+                            google_deleted += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to delete Google event {ge['google_event_id']}: {e}")
+            except Exception as e:
+                logger.warning(f"Google deletion step failed: {e}")
 
             logger.warning(f"Bulk deleted {count} events")
 
             return {
                 "success": True,
                 "deleted_count": count,
+                "google_deleted": google_deleted,
                 "warning": "Events permanently deleted"
             }
 

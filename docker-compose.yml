@@ -6,6 +6,7 @@ services:
     build:
       context: ./containers/langgraph-agents
       dockerfile: Dockerfile
+    image: ai_stack-langgraph-agents:v2-force-rebuild
     container_name: langgraph-agents
     restart: unless-stopped
     environment:
@@ -54,6 +55,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
       VAULT_PATH: ${VAULT_PATH:-/mnt/user/data/vault}
+      TODOIST_API_TOKEN: ${TODOIST_API_TOKEN:-}
+      TODOIST_SYNC_ENABLED: ${TODOIST_SYNC_ENABLED:-false}
     ports:
       - "8000:8000"
     volumes:

@@ -980,7 +980,19 @@ async def search_events(
     # Validate inputs
     validate_limit(limit)
 
+    def _normalize_dt(value: Optional[str | datetime]) -> Optional[datetime]:
+        """Parse incoming date/time and strip tz."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=None)
+        parsed = normalize_due_date(value)
+        return parsed.replace(tzinfo=None) if parsed else None
+
     pool = await get_db_pool()
+
+    start_dt = _normalize_dt(start_date)
+    end_dt = _normalize_dt(end_date)
 
     query = """
         SELECT
@@ -992,14 +1004,14 @@ async def search_events(
     params = [user_id]
     param_count = 1
 
-    if start_date:
+    if start_dt:
         param_count += 1
-        params.append(start_date)
+        params.append(start_dt)
         query += f" AND start_time >= ${param_count}"
 
-    if end_date:
+    if end_dt:
         param_count += 1
-        params.append(end_date)
+        params.append(end_dt)
         query += f" AND start_time <= ${param_count}"
 
     # Use parameterized limit for consistency

@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     # Vault / Documents
     vault_path: str = "/mnt/user/data/vault"
 
+    # Todoist Integration
+    todoist_api_token: str | None = None
+    todoist_sync_enabled: bool = False
+
     # Single-user system
     default_user_id: str = "00000000-0000-0000-0000-000000000001"
 

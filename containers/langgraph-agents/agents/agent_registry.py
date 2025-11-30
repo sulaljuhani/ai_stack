@@ -114,6 +114,8 @@ BUILTIN_NODES: Dict[str, str] = {
     "reminder_agent": "agents.reminder_agent.reminder_agent_node",
     "knowledge_agent": "agents.knowledge_agent.knowledge_agent_node",
     "note_agent": "agents.note_agent.note_agent_node",
+    "recorder_agent": "agents.recorder_agent.recorder_agent_node",
+    "analyst_agent": "agents.analyst_agent.analyst_agent_node",
 }
 
 

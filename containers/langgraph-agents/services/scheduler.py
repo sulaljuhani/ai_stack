@@ -226,21 +226,17 @@ def setup_scheduler(scheduler: AsyncIOScheduler) -> None:
     else:
         logger.info("Todoist sync is disabled (set TODOIST_SYNC_ENABLED=true to enable)")
 
-    # Job 10: Google Calendar Sync - every 15 minutes (if enabled)
+    # Job 10: Google Calendar Sync - every 15 minutes
     # Replaces n8n workflow: 14-google-calendar-sync.json
-    gcal_enabled = os.getenv("GOOGLE_CALENDAR_SYNC_ENABLED", "false").lower() == "true"
-    if gcal_enabled:
-        scheduler.add_job(
-            sync_google_calendar,
-            'interval',
-            minutes=15,
-            id='gcal_sync',
-            name='Google Calendar Bidirectional Sync',
-            replace_existing=True
-        )
-        logger.info("Registered job: gcal_sync (every 15 minutes)")
-    else:
-        logger.info("Google Calendar sync is disabled (set GOOGLE_CALENDAR_SYNC_ENABLED=true to enable)")
+    scheduler.add_job(
+        'services.external_sync:sync_google_calendar',
+        'interval',
+        minutes=15,
+        id='google_calendar_sync',
+        name='Google Calendar Bidirectional Sync',
+        replace_existing=True
+    )
+    logger.info("Registered job: google_calendar_sync (every 15 minutes)")
 
     logger.info("All scheduled jobs registered successfully")
 

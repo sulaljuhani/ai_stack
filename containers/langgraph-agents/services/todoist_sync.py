@@ -71,6 +71,11 @@ def parse_datetime(value: Optional[str], timezone: Optional[str] = None) -> Opti
                 dt = dt.astimezone(ZoneInfo(timezone))
             except Exception:
                 pass
+        # Normalize to naive UTC for DB storage (timestamp without timezone)
+        if dt.tzinfo:
+            dt = dt.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+        else:
+            dt = dt.replace(tzinfo=None)
         return dt
     except Exception:
         return None
@@ -151,6 +156,42 @@ class TodoistSyncService:
     async def _delete_task(self, conn, todoist_id: str) -> None:
         await conn.execute("DELETE FROM tasks WHERE todoist_id = $1", todoist_id)
 
+    async def _prune_missing_projects(self, conn, live_ids: Sequence[str]) -> None:
+        """Remove projects no longer returned by Todoist during a full sync."""
+        ids = list(live_ids)
+        if ids:
+            await conn.execute(
+                "DELETE FROM todoist_projects WHERE user_id = $1 AND NOT (id = ANY($2::text[]))",
+                DEFAULT_USER_ID,
+                ids,
+            )
+        else:
+            await conn.execute("DELETE FROM todoist_projects WHERE user_id = $1", DEFAULT_USER_ID)
+
+    async def _prune_missing_sections(self, conn, live_ids: Sequence[str]) -> None:
+        """Remove sections no longer returned by Todoist during a full sync."""
+        ids = list(live_ids)
+        if ids:
+            await conn.execute(
+                "DELETE FROM todoist_sections WHERE user_id = $1 AND NOT (id = ANY($2::text[]))",
+                DEFAULT_USER_ID,
+                ids,
+            )
+        else:
+            await conn.execute("DELETE FROM todoist_sections WHERE user_id = $1", DEFAULT_USER_ID)
+
+    async def _prune_missing_labels(self, conn, live_ids: Sequence[str]) -> None:
+        """Remove labels no longer returned by Todoist during a full sync."""
+        ids = list(live_ids)
+        if ids:
+            await conn.execute(
+                "DELETE FROM todoist_labels WHERE user_id = $1 AND NOT (id = ANY($2::text[]))",
+                DEFAULT_USER_ID,
+                ids,
+            )
+        else:
+            await conn.execute("DELETE FROM todoist_labels WHERE user_id = $1", DEFAULT_USER_ID)
+
     async def _upsert_projects(self, conn, projects: Sequence[Dict[str, Any]]) -> int:
         count = 0
         for project in projects:
@@ -184,7 +225,7 @@ class TodoistSyncService:
                 bool(project.get("is_favorite", False)),
                 bool(project.get("is_inbox_project", False)),
                 project.get("view_style", "list"),
-                project,
+                json.dumps(project),
                 parse_datetime(project.get("created_at")),
             )
             count += 1
@@ -214,7 +255,7 @@ class TodoistSyncService:
                 section.get("project_id"),
                 section.get("name", ""),
                 section.get("section_order", 0),
-                section,
+                json.dumps(section),
                 parse_datetime(section.get("created_at")),
             )
             count += 1
@@ -246,7 +287,7 @@ class TodoistSyncService:
                 label.get("color"),
                 label.get("item_order", 0),
                 bool(label.get("is_favorite", False)),
-                label,
+                json.dumps(label),
                 parse_datetime(label.get("created_at")),
             )
             count += 1
@@ -265,7 +306,9 @@ class TodoistSyncService:
             due_date = parse_datetime(due.get("date"), due.get("timezone")) or parse_datetime(
                 due.get("datetime"), due.get("timezone")
             )
-            status = "done" if task.get("is_completed") else "todo"
+            # Todoist sync payload uses either `is_completed` (v2 REST) or `checked` (sync API).
+            status = "done" if task.get("is_completed") or task.get("checked") else "todo"
+            completed_at = parse_datetime(task.get("completed_at"))
             try:
                 priority_raw = int(task.get("priority", 1))
             except Exception:
@@ -282,12 +325,12 @@ class TodoistSyncService:
                 """
                 INSERT INTO tasks (
                     user_id, title, description, due_date, due_string, due_is_recurring,
-                    priority, status, todoist_id, todoist_project_id, todoist_section_id,
+                    priority, status, completed_at, todoist_id, todoist_project_id, todoist_section_id,
                     todoist_parent_id, todoist_order, sync_id, labels, created_at,
                     updated_at, todoist_raw, todoist_sync_at
                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                    $12, $13, $14, $15, COALESCE($16, NOW()), NOW(), $17, NOW()
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                    $13, $14, $15, $16, COALESCE($17, NOW()), NOW(), $18, NOW()
                 )
                 ON CONFLICT (todoist_id) DO UPDATE SET
                     title = EXCLUDED.title,
@@ -297,6 +340,7 @@ class TodoistSyncService:
                     due_is_recurring = EXCLUDED.due_is_recurring,
                     priority = EXCLUDED.priority,
                     status = EXCLUDED.status,
+                    completed_at = COALESCE(EXCLUDED.completed_at, tasks.completed_at),
                     todoist_project_id = EXCLUDED.todoist_project_id,
                     todoist_section_id = EXCLUDED.todoist_section_id,
                     todoist_parent_id = EXCLUDED.todoist_parent_id,
@@ -316,6 +360,7 @@ class TodoistSyncService:
                 bool(due.get("is_recurring", False)),
                 priority,
                 status,
+                completed_at,
                 todoist_id,
                 task.get("project_id"),
                 task.get("section_id"),
@@ -324,7 +369,7 @@ class TodoistSyncService:
                 task.get("sync_id"),
                 labels or [],
                 parse_datetime(task.get("created_at")),
-                task,
+                json.dumps(task),
             )
 
             if result and result["inserted"]:
@@ -349,7 +394,9 @@ class TodoistSyncService:
         """
         commands: List[Dict[str, Any]] = []
         metadata: Dict[str, Dict[str, Any]] = {}
-        cutoff = since or datetime.utcnow()
+        # Use the last incremental/full sync time if present; otherwise fall back
+        # to an ancient timestamp so first/full syncs still push local changes.
+        cutoff = since or datetime.min
 
         rows = await conn.fetch(
             """
@@ -388,7 +435,9 @@ class TodoistSyncService:
             if row["due_is_recurring"] and "due_string" in args:
                 args["due_lang"] = "en"
 
-            if not todoist_id:
+            is_local_placeholder = todoist_id and str(todoist_id).startswith("local-")
+
+            if not todoist_id or is_local_placeholder:
                 temp_id = str(uuid4())
                 command_uuid = str(uuid4())
                 commands.append(
@@ -433,6 +482,12 @@ class TodoistSyncService:
         for temp_id, todoist_id in temp_map.items():
             for meta in metadata.values():
                 if meta.get("temp_id") == temp_id and meta.get("type") == "add":
+                    # Ensure no duplicate rows conflict with unique todoist_id constraint
+                    await conn.execute(
+                        "DELETE FROM tasks WHERE todoist_id = $1 AND id <> $2",
+                        todoist_id,
+                        meta["local_id"],
+                    )
                     await conn.execute(
                         """
                         UPDATE tasks
@@ -452,11 +507,26 @@ class TodoistSyncService:
                 logger.error("Todoist command %s failed: %s", command_uuid, status)
                 continue
             if meta["type"] in {"update", "close"}:
-                await conn.execute(
-                    "UPDATE tasks SET todoist_sync_at = $1, updated_at = $1 WHERE id = $2",
-                    now_ts,
-                    meta["local_id"],
-                )
+                # If we sent a close, mark the local task done immediately
+                if meta["type"] == "close":
+                    await conn.execute(
+                        """
+                        UPDATE tasks
+                        SET status = 'done',
+                            completed_at = COALESCE(completed_at, $1),
+                            todoist_sync_at = $1,
+                            updated_at = $1
+                        WHERE id = $2
+                        """,
+                        now_ts,
+                        meta["local_id"],
+                    )
+                else:
+                    await conn.execute(
+                        "UPDATE tasks SET todoist_sync_at = $1, updated_at = $1 WHERE id = $2",
+                        now_ts,
+                        meta["local_id"],
+                    )
 
     async def quick_add(self, text: str) -> Dict[str, Any]:
         """
@@ -636,11 +706,31 @@ class TodoistSyncService:
             labels = payload.get("labels", [])
             items = payload.get("items", [])
 
+            live_project_ids = [
+                str(project["id"])
+                for project in projects
+                if project.get("id") and not project.get("is_deleted") and not project.get("is_archived")
+            ]
+            live_section_ids = [
+                str(section["id"])
+                for section in sections
+                if section.get("id") and not section.get("is_deleted") and not section.get("is_archived")
+            ]
+            live_label_ids = [
+                str(label["id"])
+                for label in labels
+                if label.get("id") and not label.get("is_deleted") and not label.get("is_archived")
+            ]
+
             async with conn.transaction():
                 project_count = await self._upsert_projects(conn, projects)
                 section_count = await self._upsert_sections(conn, sections)
                 label_count = await self._upsert_labels(conn, labels)
                 created, updated = await self._upsert_tasks(conn, items)
+                if full_sync:
+                    await self._prune_missing_projects(conn, live_project_ids)
+                    await self._prune_missing_sections(conn, live_section_ids)
+                    await self._prune_missing_labels(conn, live_label_ids)
                 if commands:
                     await self._apply_command_results(conn, payload, metadata)
                 await self._update_state(conn, payload["sync_token"], full_sync=full_sync)

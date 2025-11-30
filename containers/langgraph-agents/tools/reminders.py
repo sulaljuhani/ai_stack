@@ -85,6 +85,8 @@ async def search_reminders(
     status: Optional[str] = None,
     priority: Optional[str | int] = None,
     category: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     include_completed: bool = True,
     limit: int = 20
 ) -> Dict[str, Any]:
@@ -95,9 +97,11 @@ async def search_reminders(
         user_id: User identifier
         status: Reminder status filter (pending, fired, completed, snoozed, cancelled)
         priority: Priority filter (0-3 or low/medium/high/urgent)
-        category: Category name filter
-        include_completed: Include completed reminders when no status is provided
-        limit: Maximum results (max 100)
+    category: Category name filter
+    start_date: ISO/natural language lower bound for remind_at
+    end_date: ISO/natural language upper bound for remind_at
+    include_completed: Include completed reminders when no status is provided
+    limit: Maximum results (max 100)
     """
     is_valid_user, user_error = _validate_user(user_id)
     if not is_valid_user:
@@ -132,6 +136,19 @@ async def search_reminders(
         param_count += 1
         params.append(category)
         where_clauses.append(f"c.name = ${param_count}")
+
+    start_dt = _normalize_remind_at(start_date) if start_date else None
+    end_dt = _normalize_remind_at(end_date) if end_date else None
+
+    if start_dt:
+        param_count += 1
+        params.append(start_dt)
+        where_clauses.append(f"r.remind_at >= ${param_count}")
+
+    if end_dt:
+        param_count += 1
+        params.append(end_dt)
+        where_clauses.append(f"r.remind_at <= ${param_count}")
 
     param_count += 1
     params.append(limit)

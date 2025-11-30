@@ -38,6 +38,7 @@ from . import note_files
 from . import life_logging
 from . import reporting
 from . import todoist_mirror
+from . import google_calendar
 
 logger = get_logger(__name__)
 
@@ -279,6 +280,12 @@ def _register_all_tools() -> None:
     # Reporting (Analyst)
     register_tool("run_read_only_sql", reporting.run_read_only_sql, ["reporting", "analyst"])
     register_tool("get_table_schema", reporting.get_table_schema, ["reporting", "analyst"])
+
+    # Google Calendar Integration
+    register_tool("create_calendar_event", google_calendar.create_calendar_event, ["calendar", "scheduler", "tasks_core"])
+    register_tool("get_upcoming_events", google_calendar.get_upcoming_events, ["calendar", "scheduler"])
+    register_tool("find_free_time", google_calendar.find_free_time, ["calendar", "scheduler"])
+
 
 
 _register_all_tools()

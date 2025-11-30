@@ -16,6 +16,7 @@ from middleware.validation import (
     SuccessResponse,
     ReminderPriority,
     RecurrencePattern,
+    BulkDeleteRequest,
 )
 from utils.db import get_db_pool
 from utils.logging import get_logger
@@ -161,6 +162,8 @@ async def list_reminders(
     is_completed: Optional[bool] = Query(None, description="Filter by completion status"),
     priority: Optional[ReminderPriority] = Query(None, description="Filter by priority"),
     category: Optional[str] = Query(None, description="Filter by category"),
+    start_date: Optional[datetime] = Query(None, description="Filter reminders on/after this date"),
+    end_date: Optional[datetime] = Query(None, description="Filter reminders on/before this date"),
     limit: int = Query(50, ge=1, le=200, description="Number of reminders to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination")
 ):
@@ -171,9 +174,18 @@ async def list_reminders(
     - is_completed (true/false)
     - priority (0-3)
     - category
+    - start_date / end_date
     """
     try:
         pool = await get_db_pool()
+
+        def _strip_tz(dt: Optional[datetime]) -> Optional[datetime]:
+            if dt and dt.tzinfo:
+                return dt.replace(tzinfo=None)
+            return dt
+
+        start_date_naive = _strip_tz(start_date)
+        end_date_naive = _strip_tz(end_date)
 
         # Build query dynamically based on filters
         where_clauses = []
@@ -193,6 +205,16 @@ async def list_reminders(
         if category:
             where_clauses.append(f"c.name = ${param_count}")
             params.append(category)
+            param_count += 1
+
+        if start_date_naive:
+            where_clauses.append(f"r.remind_at >= ${param_count}")
+            params.append(start_date_naive)
+            param_count += 1
+
+        if end_date_naive:
+            where_clauses.append(f"r.remind_at <= ${param_count}")
+            params.append(end_date_naive)
             param_count += 1
 
         where_clause = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
@@ -479,6 +501,76 @@ async def update_reminder(reminder_id: str, request: UpdateReminderRequest):
     except Exception as e:
         logger.error(f"Error updating reminder {reminder_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update reminder: {str(e)}")
+
+
+# ============================================================================
+# BULK DELETE Reminders
+# ============================================================================
+
+@router.post("/bulk-delete")
+async def bulk_delete_reminders(request: BulkDeleteRequest):
+    """Delete multiple reminders by IDs and/or date range."""
+    try:
+        pool = await get_db_pool()
+
+        def _strip_tz(dt: Optional[datetime]) -> Optional[datetime]:
+            if dt and dt.tzinfo:
+                return dt.replace(tzinfo=None)
+            return dt
+
+        start_date = _strip_tz(request.start_date)
+        end_date = _strip_tz(request.end_date)
+
+        where_clauses = []
+        params = []
+        param_count = 1
+
+        if request.ids:
+            where_clauses.append(f"r.id = ANY(${param_count}::uuid[])")
+            params.append(request.ids)
+            param_count += 1
+
+        if start_date:
+            where_clauses.append(f"r.remind_at >= ${param_count}")
+            params.append(start_date)
+            param_count += 1
+
+        if end_date:
+            where_clauses.append(f"r.remind_at <= ${param_count}")
+            params.append(end_date)
+            param_count += 1
+
+        where_sql = " WHERE " + " AND ".join(where_clauses)
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT r.id FROM reminders r{where_sql}",
+                *params
+            )
+            ids_to_delete = [str(row["id"]) for row in rows]
+
+            if not ids_to_delete:
+                raise HTTPException(status_code=404, detail="No reminders matched the provided criteria")
+
+            deleted = await conn.execute(
+                "DELETE FROM reminders WHERE id = ANY($1::uuid[])",
+                ids_to_delete
+            )
+            deleted_count = int(deleted.split()[-1]) if deleted else 0
+
+            logger.info(f"Bulk deleted {deleted_count} reminders via API")
+
+            return {
+                "success": True,
+                "deleted_count": deleted_count,
+                "deleted_ids": ids_to_delete
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error bulk deleting reminders: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to bulk delete reminders: {str(e)}")
 
 
 # ============================================================================

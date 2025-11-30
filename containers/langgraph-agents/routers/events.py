@@ -5,7 +5,7 @@ API endpoints for event/calendar management operations.
 Replaces n8n workflow: 03-create-event.json
 """
 
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -15,6 +15,7 @@ from middleware.validation import (
     CreateEventRequest,
     UpdateEventRequest,
     SuccessResponse,
+    BulkDeleteRequest,
 )
 from utils.db import get_db_pool
 from utils.logging import get_logger
@@ -34,7 +35,11 @@ class EventResponse(BaseModel):
     end_time: datetime
     location: Optional[str]
     category: Optional[str]
-    attendees: List[str]
+    google_calendar_id: Optional[str] = None
+    google_event_id: Optional[str] = None
+    status: Optional[str] = None
+    source: Optional[str] = None
+    attendees: List[Any]
     is_all_day: bool
     created_at: datetime
     updated_at: datetime
@@ -126,12 +131,14 @@ async def create_event(request: CreateEventRequest):
                     category_id,
                     attendees,
                     is_all_day,
+                    source,
                     created_at,
                     updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'manual', NOW(), NOW())
                 RETURNING
                     id, title, description, start_time, end_time, location,
-                    attendees, is_all_day, created_at, updated_at
+                    attendees, is_all_day, status, source, google_calendar_id, google_event_id,
+                    created_at, updated_at
                 """,
                 DEFAULT_USER_ID,
                 request.title,
@@ -155,6 +162,10 @@ async def create_event(request: CreateEventRequest):
                 location=event['location'],
                 category=request.category,
                 attendees=json.loads(event['attendees']) if isinstance(event['attendees'], str) else (event['attendees'] or []),
+                google_calendar_id=event.get('google_calendar_id'),
+                google_event_id=event.get('google_event_id'),
+                status=event.get('status'),
+                source=event.get('source'),
                 is_all_day=event['is_all_day'],
                 created_at=event['created_at'],
                 updated_at=event['updated_at']
@@ -190,19 +201,28 @@ async def list_events(
     try:
         pool = await get_db_pool()
 
+        # Normalize timezone-aware datetimes to naive to match DB storage
+        def _strip_tz(dt: Optional[datetime]) -> Optional[datetime]:
+            if dt and dt.tzinfo:
+                return dt.replace(tzinfo=None)
+            return dt
+
+        start_date_naive = _strip_tz(start_date)
+        end_date_naive = _strip_tz(end_date)
+
         # Build query dynamically based on filters
         where_clauses = []
         params = []
         param_count = 1
 
-        if start_date:
+        if start_date_naive:
             where_clauses.append(f"e.start_time >= ${param_count}")
-            params.append(start_date)
+            params.append(start_date_naive)
             param_count += 1
 
-        if end_date:
+        if end_date_naive:
             where_clauses.append(f"e.end_time <= ${param_count}")
-            params.append(end_date)
+            params.append(end_date_naive)
             param_count += 1
 
         if category:
@@ -232,7 +252,8 @@ async def list_events(
             query = f"""
                 SELECT
                     e.id, e.title, e.description, e.start_time, e.end_time,
-                    e.location, e.attendees, e.is_all_day,
+                    e.location, e.attendees, e.is_all_day, e.status, e.source,
+                    e.google_calendar_id, e.google_event_id,
                     e.created_at, e.updated_at,
                     c.name as category
                 FROM events e
@@ -254,6 +275,10 @@ async def list_events(
                     location=row['location'],
                     category=row['category'],
                     attendees=json.loads(row['attendees']) if isinstance(row['attendees'], str) else (row['attendees'] or []),
+                    google_calendar_id=row.get('google_calendar_id'),
+                    google_event_id=row.get('google_event_id'),
+                    status=row.get('status'),
+                    source=row.get('source'),
                     is_all_day=row['is_all_day'],
                     created_at=row['created_at'],
                     updated_at=row['updated_at']
@@ -284,7 +309,8 @@ async def get_events_today():
                 """
                 SELECT
                     e.id, e.title, e.description, e.start_time, e.end_time,
-                    e.location, e.attendees, e.is_all_day,
+                    e.location, e.attendees, e.is_all_day, e.status, e.source,
+                    e.google_calendar_id, e.google_event_id,
                     e.created_at, e.updated_at,
                     c.name as category
                 FROM events e
@@ -304,6 +330,10 @@ async def get_events_today():
                     location=row['location'],
                     category=row['category'],
                     attendees=json.loads(row['attendees']) if isinstance(row['attendees'], str) else (row['attendees'] or []),
+                    google_calendar_id=row.get('google_calendar_id'),
+                    google_event_id=row.get('google_event_id'),
+                    status=row.get('status'),
+                    source=row.get('source'),
                     is_all_day=row['is_all_day'],
                     created_at=row['created_at'],
                     updated_at=row['updated_at']
@@ -336,7 +366,8 @@ async def get_events_week():
                 """
                 SELECT
                     e.id, e.title, e.description, e.start_time, e.end_time,
-                    e.location, e.attendees, e.is_all_day,
+                    e.location, e.attendees, e.is_all_day, e.status, e.source,
+                    e.google_calendar_id, e.google_event_id,
                     e.created_at, e.updated_at,
                     c.name as category
                 FROM events e
@@ -358,6 +389,10 @@ async def get_events_week():
                     location=row['location'],
                     category=row['category'],
                     attendees=json.loads(row['attendees']) if isinstance(row['attendees'], str) else (row['attendees'] or []),
+                    google_calendar_id=row.get('google_calendar_id'),
+                    google_event_id=row.get('google_event_id'),
+                    status=row.get('status'),
+                    source=row.get('source'),
                     is_all_day=row['is_all_day'],
                     created_at=row['created_at'],
                     updated_at=row['updated_at']
@@ -388,7 +423,8 @@ async def get_event(event_id: str):
                 """
                 SELECT
                     e.id, e.title, e.description, e.start_time, e.end_time,
-                    e.location, e.attendees, e.is_all_day,
+                    e.location, e.attendees, e.is_all_day, e.status, e.source,
+                    e.google_calendar_id, e.google_event_id,
                     e.created_at, e.updated_at,
                     c.name as category
                 FROM events e
@@ -410,6 +446,10 @@ async def get_event(event_id: str):
                 location=row['location'],
                 category=row['category'],
                 attendees=json.loads(row['attendees']) if isinstance(row['attendees'], str) else (row['attendees'] or []),
+                google_calendar_id=row.get('google_calendar_id'),
+                google_event_id=row.get('google_event_id'),
+                status=row.get('status'),
+                source=row.get('source'),
                 is_all_day=row['is_all_day'],
                 created_at=row['created_at'],
                 updated_at=row['updated_at']
@@ -459,12 +499,14 @@ async def update_event(event_id: str, request: UpdateEventRequest):
 
             if request.start_time is not None:
                 update_fields.append(f"start_time = ${param_count}")
-                params.append(request.start_time)
+                start_time = request.start_time.replace(tzinfo=None) if request.start_time.tzinfo else request.start_time
+                params.append(start_time)
                 param_count += 1
 
             if request.end_time is not None:
                 update_fields.append(f"end_time = ${param_count}")
-                params.append(request.end_time)
+                end_time = request.end_time.replace(tzinfo=None) if request.end_time.tzinfo else request.end_time
+                params.append(end_time)
                 param_count += 1
 
             if request.location is not None:
@@ -517,7 +559,8 @@ async def update_event(event_id: str, request: UpdateEventRequest):
                 WHERE id = ${param_count}
                 RETURNING
                     id, title, description, start_time, end_time, location,
-                    attendees, is_all_day, created_at, updated_at
+                    attendees, is_all_day, status, source, google_calendar_id, google_event_id,
+                    created_at, updated_at
             """
 
             event = await conn.fetchrow(query, *params)
@@ -543,6 +586,10 @@ async def update_event(event_id: str, request: UpdateEventRequest):
                 location=event['location'],
                 category=category_name,
                 attendees=json.loads(event['attendees']) if isinstance(event['attendees'], str) else (event['attendees'] or []),
+                google_calendar_id=event.get('google_calendar_id'),
+                google_event_id=event.get('google_event_id'),
+                status=event.get('status'),
+                source=event.get('source'),
                 is_all_day=event['is_all_day'],
                 created_at=event['created_at'],
                 updated_at=event['updated_at']
@@ -553,6 +600,76 @@ async def update_event(event_id: str, request: UpdateEventRequest):
     except Exception as e:
         logger.error(f"Error updating event {event_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update event: {str(e)}")
+
+
+# ============================================================================
+# BULK DELETE Events
+# ============================================================================
+
+@router.post("/bulk-delete")
+async def bulk_delete_events(request: BulkDeleteRequest):
+    """Delete multiple events by IDs and/or date range."""
+    try:
+        pool = await get_db_pool()
+
+        def _strip_tz(dt: Optional[datetime]) -> Optional[datetime]:
+            if dt and dt.tzinfo:
+                return dt.replace(tzinfo=None)
+            return dt
+
+        start_date = _strip_tz(request.start_date)
+        end_date = _strip_tz(request.end_date)
+
+        where_clauses = []
+        params = []
+        param_count = 1
+
+        if request.ids:
+            where_clauses.append(f"e.id = ANY(${param_count}::uuid[])")
+            params.append(request.ids)
+            param_count += 1
+
+        if start_date:
+            where_clauses.append(f"e.start_time >= ${param_count}")
+            params.append(start_date)
+            param_count += 1
+
+        if end_date:
+            where_clauses.append(f"e.end_time <= ${param_count}")
+            params.append(end_date)
+            param_count += 1
+
+        where_sql = " WHERE " + " AND ".join(where_clauses)
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT e.id FROM events e{where_sql}",
+                *params
+            )
+            ids_to_delete = [str(row["id"]) for row in rows]
+
+            if not ids_to_delete:
+                raise HTTPException(status_code=404, detail="No events matched the provided criteria")
+
+            deleted = await conn.execute(
+                "DELETE FROM events WHERE id = ANY($1::uuid[])",
+                ids_to_delete
+            )
+            deleted_count = int(deleted.split()[-1]) if deleted else 0
+
+            logger.info(f"Bulk deleted {deleted_count} events via API")
+
+            return {
+                "success": True,
+                "deleted_count": deleted_count,
+                "deleted_ids": ids_to_delete
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error bulk deleting events: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to bulk delete events: {str(e)}")
 
 
 # ============================================================================

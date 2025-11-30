@@ -11,6 +11,7 @@ from utils.logging import get_logger
 from utils.redis_client import get_redis_client
 from .reminders import VALID_STATUSES, DEFAULT_USER_ID, _normalize_remind_at
 from .validation import validate_count, validate_duration_minutes
+from services.google_calendar_sync import GoogleCalendarSyncService
 
 logger = get_logger(__name__)
 
@@ -182,33 +183,70 @@ async def bulk_snooze_reminders(
 
 @tool
 async def bulk_delete_reminders(
-    reminder_ids: List[str],
+    reminder_ids: Optional[List[str]] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     user_id: str = DEFAULT_USER_ID,
     enable_undo: bool = True
 ) -> Dict[str, Any]:
     """
     Delete multiple reminders.
     """
-    is_valid_ids, id_error = _validate_ids(reminder_ids)
-    if not is_valid_ids:
-        return {"success": False, "error": id_error}
+    if not reminder_ids and not start_date and not end_date:
+        return {"success": False, "error": "Provide reminder_ids or a date range"}
 
     pool = await get_db_pool()
 
     try:
         async with pool.acquire() as conn:
+            start_dt = _normalize_remind_at(start_date) if start_date else None
+            end_dt = _normalize_remind_at(end_date) if end_date else None
+
+            where_clauses = ["user_id = $1"]
+            params = [user_id]
+            param_count = 1
+
+            if reminder_ids:
+                param_count += 1
+                params.append(reminder_ids)
+                where_clauses.append(f"id = ANY(${param_count}::uuid[])")
+
+            if start_dt:
+                param_count += 1
+                params.append(start_dt)
+                where_clauses.append(f"remind_at >= ${param_count}")
+
+            if end_dt:
+                param_count += 1
+                params.append(end_dt)
+                where_clauses.append(f"remind_at <= ${param_count}")
+
+            where_sql = " AND ".join(where_clauses)
+
+            existing = await conn.fetch(
+                f"""
+                SELECT
+                    id, user_id, title, description, remind_at, priority,
+                    category_id, is_recurring, recurrence_rule, status,
+                    tags, completed_at, created_at, updated_at,
+                    google_event_id, google_calendar_id
+                FROM reminders
+                WHERE {where_sql}
+                """,
+                *params
+            )
+
+            reminder_ids = [str(row["id"]) for row in existing]
+
+            if not reminder_ids:
+                return {"success": False, "error": "No reminders matched the provided criteria"}
+
+            # Re-validate count after filtering
+            is_valid_ids, id_error = _validate_ids(reminder_ids)
+            if not is_valid_ids:
+                return {"success": False, "error": id_error}
+
             if enable_undo:
-                existing = await conn.fetch(
-                    """
-                    SELECT
-                        id, user_id, title, description, remind_at, priority,
-                        category_id, is_recurring, recurrence_rule, status,
-                        tags, completed_at, created_at, updated_at
-                    FROM reminders
-                    WHERE user_id = $1 AND id = ANY($2::uuid[])
-                    """,
-                    user_id, reminder_ids
-                )
                 await _store_undo_snapshot(
                     user_id,
                     action="delete",
@@ -224,10 +262,37 @@ async def bulk_delete_reminders(
                 user_id, reminder_ids
             )
 
+        google_events = [
+            {
+                "google_event_id": row.get("google_event_id"),
+                "google_calendar_id": row.get("google_calendar_id") or "primary",
+            }
+            for row in existing
+            if row.get("google_event_id")
+        ]
+
+        google_deleted = 0
+        try:
+            google_service = GoogleCalendarSyncService(pool)
+            if google_service.service and google_events:
+                for ge in google_events:
+                    try:
+                        google_service.service.events().delete(
+                            calendarId=ge["google_calendar_id"],
+                            eventId=ge["google_event_id"],
+                            sendUpdates='none'
+                        ).execute()
+                        google_deleted += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to delete Google reminder event {ge['google_event_id']}: {e}")
+        except Exception as e:
+            logger.warning(f"Google reminder deletion step failed: {e}")
+
         return {
             "success": True,
             "deleted_count": len(deleted),
             "deleted_ids": [str(row["id"]) for row in deleted],
+            "google_deleted": google_deleted,
         }
 
     except Exception as e:
@@ -278,11 +343,13 @@ async def undo_last_reminder_action(user_id: str = DEFAULT_USER_ID) -> Dict[str,
                         INSERT INTO reminders (
                             id, user_id, title, description, remind_at, priority,
                             category_id, is_recurring, recurrence_rule, status,
-                            tags, completed_at, created_at, updated_at
+                            tags, completed_at, created_at, updated_at,
+                            google_event_id, google_calendar_id, google_sync_at
                         ) VALUES (
                             $1, $2, $3, $4, $5, $6,
                             $7, $8, $9, $10,
-                            $11, $12, $13, $14
+                            $11, $12, $13, $14,
+                            $15, $16, $17
                         )
                         ON CONFLICT (id) DO NOTHING
                         """,
@@ -300,6 +367,9 @@ async def undo_last_reminder_action(user_id: str = DEFAULT_USER_ID) -> Dict[str,
                         rem.get("completed_at"),
                         rem.get("created_at"),
                         rem.get("updated_at"),
+                        rem.get("google_event_id"),
+                        rem.get("google_calendar_id"),
+                        rem.get("google_sync_at"),
                     )
             else:
                 return {"success": False, "error": f"Unsupported undo action '{action}'"}

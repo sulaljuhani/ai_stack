@@ -37,6 +37,8 @@ from routers import (
     chat_stream_router,
     todoist_webhook_router,
     todoist_mirror_router,
+    todoist_actions_router,
+    google_calendar,
 )
 from utils.metrics import get_metrics_snapshot
 
@@ -130,12 +132,22 @@ async def verify_api_key(request: Request, call_next):
     # Get API key from header
     api_key = request.headers.get("X-API-Key")
 
+    # Debug logging
+    logger.info(f"API Key validation - Path: {request.url.path}, Received: {api_key[:20] if api_key else 'None'}..., Expected: {settings.api_key[:20] if settings.api_key else 'None'}...")
+
     # Validate API key
     if api_key != settings.api_key:
-        return JSONResponse(
+        # Include CORS headers in 401 response so browser doesn't show CORS error
+        origin = request.headers.get("origin", "")
+        response = JSONResponse(
             status_code=401,
             content={"detail": "Invalid or missing API key"}
         )
+        # Add CORS headers if origin is allowed
+        if origin in settings.get_cors_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
 
     return await call_next(request)
 
@@ -184,6 +196,7 @@ app.include_router(reminders_router)
 app.include_router(events_router)
 app.include_router(todoist_webhook_router)
 app.include_router(todoist_mirror_router)
+app.include_router(todoist_actions_router)
 
 # Include routers for vault & document management (replaces n8n workflows 07, 15, 18)
 app.include_router(vault_router)
@@ -197,6 +210,8 @@ app.include_router(imports_router)
 
 # Include router for OpenAI-compatible streaming chat (Open WebUI integration)
 app.include_router(chat_stream_router)
+app.include_router(google_calendar.router, tags=["Google Calendar"])
+
 
 
 # ============================================================================

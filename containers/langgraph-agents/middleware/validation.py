@@ -13,11 +13,12 @@ Usage:
         ...
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 from enum import Enum
 import re
+from pydantic import model_validator
 
 
 # ============================================================================
@@ -190,9 +191,12 @@ class CreateReminderRequest(BaseModel):
     @classmethod
     def validate_remind_at(cls, v: datetime) -> datetime:
         """Ensure remind_at is in the future"""
-        if v <= datetime.now():
+        # Normalize to UTC and make naive to match DB storage
+        now = datetime.now(timezone.utc)
+        v_norm = v.astimezone(timezone.utc) if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        if v_norm <= now:
             raise ValueError("remind_at must be in the future")
-        return v
+        return v_norm.replace(tzinfo=None)
 
 
 class UpdateReminderRequest(BaseModel):
@@ -207,14 +211,45 @@ class UpdateReminderRequest(BaseModel):
     recurrence: Optional[RecurrencePattern] = None
     is_completed: Optional[bool] = None
 
-    @field_validator('remind_at')
-    @classmethod
-    def validate_remind_at(cls, v: Optional[datetime]) -> Optional[datetime]:
-        """Ensure remind_at is in the future if provided"""
-        if v and v <= datetime.now():
-            raise ValueError("remind_at must be in the future")
-        return v
 
+# ============================================================================
+# Bulk/Delete Helper Models
+# ============================================================================
+
+class BulkDeleteRequest(BaseModel):
+    """
+    Shared request model for bulk deletes (events, reminders, tasks, etc.).
+
+    Supports deletion by explicit IDs and/or by a date range.
+    At least one selector must be provided.
+    """
+
+    ids: Optional[List[str]] = Field(
+        default=None,
+        description="IDs to delete; at least one ID or a date range is required",
+    )
+    start_date: Optional[datetime] = Field(
+        default=None,
+        description="Inclusive start of date range filter",
+    )
+    end_date: Optional[datetime] = Field(
+        default=None,
+        description="Inclusive end of date range filter",
+    )
+
+    @model_validator(mode="after")
+    def validate_selectors(self):
+        """Require at least one selector; also enforce start<=end when both provided."""
+        has_ids = bool(self.ids)
+        has_range = self.start_date is not None or self.end_date is not None
+        if not (has_ids or has_range):
+            raise ValueError("Provide at least one of: ids, start_date/end_date")
+
+        if self.start_date and self.end_date:
+            if self.end_date < self.start_date:
+                raise ValueError("end_date must be on or after start_date")
+
+        return self
 
 # ============================================================================
 # Event Validation Models
