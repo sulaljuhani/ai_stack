@@ -224,7 +224,7 @@ def create_routing_node():
             team_cfg = get_team_config(state.get("current_team"))
             if team_cfg:
                 inferred_target = state.get("target_agent")
-                                target = inferred_target or team_cfg.supervisor
+                target = inferred_target or team_cfg.supervisor
                 logger.info(
                     "Team-constrained routing -> %s (inferred_target=%s, team_stage=%s)",
                     target,
