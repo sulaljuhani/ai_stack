@@ -13,6 +13,7 @@ from .state import MultiAgentState
 from utils.llm import get_routing_llm
 from utils.logging import get_logger
 from agents.agent_registry import get_weighted_keywords, list_agent_names, get_agent_descriptions
+from agents.team_registry import get_team_config
 
 logger = get_logger(__name__)
 
@@ -37,12 +38,13 @@ WEIGHTED_KEYWORDS = get_weighted_keywords()
 AGENT_DESCRIPTIONS = get_agent_descriptions()
 
 
-def simple_keyword_routing(message: str) -> str | None:
+def simple_keyword_routing(message: str, allowed_agents: list[str] | None = None) -> str | None:
     """
     Attempt simple keyword-based routing.
 
     Args:
         message: User message content
+        allowed_agents: Optional list of agents allowed for this routing (e.g., current team)
 
     Returns:
         Agent name if confident match, None otherwise
@@ -52,6 +54,8 @@ def simple_keyword_routing(message: str) -> str | None:
     # Count weighted keyword matches for each agent
     scores = {}
     for agent, keywords in WEIGHTED_KEYWORDS.items():
+        if allowed_agents is not None and agent not in allowed_agents:
+            continue
         score = 0.0
         for kw, weight in keywords:
             if kw in message_lower:
@@ -89,9 +93,14 @@ async def llm_routing(message: str, context: dict) -> RoutingDecision:
     Returns:
         Structured routing decision
     """
+    allowed_agents: list[str] | None = context.get("allowed_agents")
+    descriptions = AGENT_DESCRIPTIONS
+    if allowed_agents is not None:
+        descriptions = {name: desc for name, desc in AGENT_DESCRIPTIONS.items() if name in allowed_agents}
+
     available_agents = "\n".join(
         f"- {name}: {desc or 'No description set'}"
-        for name, desc in AGENT_DESCRIPTIONS.items()
+        for name, desc in descriptions.items()
     )
 
     prompt = ChatPromptTemplate.from_messages([
@@ -204,16 +213,25 @@ async def route_to_agent(state: MultiAgentState) -> str:
     Returns:
         Agent name to route to
     """
+    # Determine allowed agents based on current team (if any)
+    allowed_agents = None
+    current_team = state.get("current_team")
+    if current_team:
+        team_cfg = get_team_config(current_team)
+        if team_cfg:
+            allowed_agents = list({team_cfg.supervisor, *team_cfg.agent_names})
+
     # Get last user message
     messages = state["messages"]
     if not messages:
-        return list_agent_names()[0]  # Default
+        default_agents = allowed_agents or list_agent_names()
+        return default_agents[0]  # Default
 
     last_message = messages[-1]
     message_content = last_message.content if hasattr(last_message, 'content') else str(last_message)
 
     # Try simple routing first
-    simple_result = simple_keyword_routing(message_content)
+    simple_result = simple_keyword_routing(message_content, allowed_agents)
     if simple_result:
         return simple_result
 
@@ -222,9 +240,15 @@ async def route_to_agent(state: MultiAgentState) -> str:
         "previous_agent": state.get("previous_agent"),
         "current_agent": state.get("current_agent"),
         "turn_count": state.get("turn_count", 0),
+        "allowed_agents": allowed_agents,
     }
 
     decision = await llm_routing(message_content, context)
+
+    # Enforce allowed agents if provided
+    if allowed_agents and decision.agent not in allowed_agents:
+        return allowed_agents[0]
+
     return decision.agent
 
 

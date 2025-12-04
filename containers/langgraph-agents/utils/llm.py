@@ -53,8 +53,15 @@ def get_routing_llm() -> BaseChatModel:
     """
     Get a fast, lightweight model for routing decisions.
     Uses the configured model but with lower temperature.
+    Enforces JSON output when supported (Ollama) to improve structured parsing.
     """
-    return get_llm(temperature=0.3, streaming=False)
+    llm = get_llm(temperature=0.3, streaming=False)
+
+    # For Ollama, enforce JSON format to improve structured output reliability
+    if settings.llm_provider == "ollama":
+        llm = llm.bind(format="json")
+
+    return llm
 
 
 def get_agent_llm(temperature: float = 0.7) -> BaseChatModel:

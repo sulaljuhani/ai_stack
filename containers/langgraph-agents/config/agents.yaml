@@ -1,35 +1,125 @@
+teams:
+  - name: task_management
+    display_name: Task Management Team
+    supervisor: task_supervisor
+    description: Handles all task-related operations
+    keywords:
+      - term: task
+        weight: 2.0
+      - todo
+      - deadline
+      - priority
+
+  - name: event_management
+    display_name: Event & Calendar Team
+    supervisor: event_supervisor
+    description: Calendar events, scheduling, and conflicts
+    keywords:
+      - term: event
+        weight: 2.0
+      - calendar
+      - schedule
+      - meeting
+
+  - name: reminder_management
+    display_name: Reminders Team
+    supervisor: reminder_supervisor
+    description: Reminder lifecycle management
+    keywords:
+      - term: reminder
+        weight: 1.8
+      - remind
+      - alert
+
+  - name: knowledge_management
+    display_name: Knowledge & Notes Team
+    supervisor: knowledge_supervisor
+    description: Notes, knowledge search, and documents
+    keywords:
+      - term: note
+        weight: 1.5
+      - knowledge
+      - search
+      - document
+
+  - name: life_logging
+    display_name: Life Logging Team
+    supervisor: logging_supervisor
+    description: Dynamic logging to database tables
+    keywords:
+      - term: log
+        weight: 1.5
+      - record
+      - track
+
+  - name: analytics
+    display_name: Analytics & Reporting Team
+    supervisor: analytics_supervisor
+    description: Data analysis and reporting
+    keywords:
+      - term: analyze
+        weight: 2.5
+      - term: report
+        weight: 2.0
+      - term: statistics
+        weight: 1.5
+
+  - name: integrations
+    display_name: External Integrations Team
+    supervisor: integration_supervisor
+    description: Todoist, Google Calendar, and external services
+    keywords:
+      - todoist
+      - google calendar
+      - sync
+
 agents:
-  - name: food_agent
+  - name: sebastian_supervisor
     enabled: true
-    context_key: food
-    prompt_file: prompts/food_agent.txt
+    type: main_supervisor
+    context_key: main
+    prompt_file: prompts/sebastian_personality.txt
+    tools: []
+    keywords: []
+    description: Main AI assistant and coordinator.
+
+  - name: task_supervisor
+    enabled: true
+    type: supervisor
+    team: task_management
+    context_key: task_team
+    prompt_file: prompts/task_supervisor.txt
+    tools: []
+    keywords: []
+    description: Orchestrates task management operations.
+
+  - name: task_retriever
+    enabled: true
+    type: task_agent
+    team: task_management
+    supervisor: task_supervisor
+    context_key: task
+    prompt_file: prompts/task_retriever.txt
     partials:
       - prompts/partials/safety.txt
       - prompts/partials/style.txt
     tools:
-      - tag:food_core
-      - tag:food_vector
-      - tag:food_recommendations
+      - tag:tasks_core
+      - tag:tasks_search
+      - tag:tasks_quick_wins
+      - tag:tasks_analytics
       - tag:memory_context
     exclude_tools: []
-    keywords:
-      - term: food
-        weight: 1.2
-      - meal
-      - eat
-      - lunch
-      - dinner
-      - breakfast
-      - snack
-      - diet
-      - recipe
-      - restaurant
-    description: Handles food logging, meal suggestions, nutrition, and preferences.
+    keywords: []
+    description: Retrieves and searches for tasks (read-only).
 
-  - name: task_agent
+  - name: task_creator
     enabled: true
+    type: task_agent
+    team: task_management
+    supervisor: task_supervisor
     context_key: task
-    prompt_file: prompts/task_agent.txt
+    prompt_file: prompts/task_creator.txt
     partials:
       - prompts/partials/safety.txt
       - prompts/partials/style.txt
@@ -37,84 +127,321 @@ agents:
       - tag:tasks_core
       - tag:tasks_dependencies
       - tag:tasks_checklists
-      - tag:tasks_bulk
-      - tag:tasks_search
-      - tag:tasks_quick_wins
-      - tag:tasks_analytics
       - tag:memory_context
     exclude_tools: []
-    keywords:
-      - term: task
-        weight: 1.5
-      - todo
-      - deadline
-      - priority
-      - project
-      - work on
-      - create a task
-      - add task
-      - task list
-    description: Task management, planning, productivity, dependencies, and checklists.
+    keywords: []
+    description: Creates new tasks and subtasks with priorities, dates, and dependencies.
 
-  - name: event_agent
+  - name: task_editor
     enabled: true
+    type: task_agent
+    team: task_management
+    supervisor: task_supervisor
+    context_key: task
+    prompt_file: prompts/task_editor.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:tasks_core
+      - tag:tasks_bulk
+      - tag:tasks_dependencies
+      - tag:tasks_checklists
+      - tag:memory_context
+    exclude_tools: []
+    keywords: []
+    description: Updates task details, tags, due dates, priority, and bulk edits.
+
+  - name: task_deleter
+    enabled: true
+    type: task_agent
+    team: task_management
+    supervisor: task_supervisor
+    context_key: task
+    prompt_file: prompts/task_deleter.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:tasks_bulk
+      - tag:tasks_core
+      - tag:tasks_dependencies
+    exclude_tools: []
+    keywords: []
+    description: Deletes or archives tasks with dependency awareness.
+
+  - name: task_validator
+    enabled: true
+    type: task_agent
+    team: task_management
+    supervisor: task_supervisor
+    context_key: task
+    prompt_file: prompts/task_validator.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:tasks_checklists
+      - tag:tasks_quick_wins
+      - tag:tasks_analytics
+      - tag:tasks_search
+      - tag:tasks_core
+    exclude_tools: []
+    keywords: []
+    description: Validates task operations and highlights issues or recommendations.
+
+  - name: event_supervisor
+    enabled: true
+    type: supervisor
+    team: event_management
+    context_key: event_team
+    prompt_file: prompts/event_supervisor.txt
+    tools: []
+    keywords: []
+    description: Orchestrates event and calendar operations.
+
+  - name: event_retriever
+    enabled: true
+    type: task_agent
+    team: event_management
+    supervisor: event_supervisor
     context_key: event
-    prompt_file: prompts/event_agent.txt
+    prompt_file: prompts/event_retriever.txt
     partials:
       - prompts/partials/safety.txt
       - prompts/partials/style.txt
     tools:
       - tag:events_core
+      - tag:events_search
+      - tag:events_recurring
+      - tag:search_shared
+    exclude_tools: []
+    keywords: []
+    description: Retrieves and searches events (read-only).
+
+  - name: event_creator
+    enabled: true
+    type: task_agent
+    team: event_management
+    supervisor: event_supervisor
+    context_key: event
+    prompt_file: prompts/event_creator.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:events_core
+      - tag:events_recurring
+      - tag:events_bulk
+      - tag:memory_context
+    exclude_tools: []
+    keywords: []
+    description: Creates single and recurring events with conflict checks.
+
+  - name: event_editor
+    enabled: true
+    type: task_agent
+    team: event_management
+    supervisor: event_supervisor
+    context_key: event
+    prompt_file: prompts/event_editor.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
       - tag:events_bulk
       - tag:events_recurring
       - tag:events_search
+      - tag:events_core
+    exclude_tools: []
+    keywords: []
+    description: Updates events and recurring series including bulk edits.
+
+  - name: event_scheduler
+    enabled: true
+    type: task_agent
+    team: event_management
+    supervisor: event_supervisor
+    context_key: event
+    prompt_file: prompts/event_scheduler.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:events_schedule
+      - tag:events_core
+      - tag:events_search
+    exclude_tools: []
+    keywords: []
+    description: Suggests availability and detects conflicts (read-only).
+
+  - name: event_deleter
+    enabled: true
+    type: task_agent
+    team: event_management
+    supervisor: event_supervisor
+    context_key: event
+    prompt_file: prompts/event_deleter.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:events_bulk
+      - tag:events_recurring
+    exclude_tools: []
+    keywords: []
+    description: Deletes single events or recurring series with safeguards.
+
+  - name: event_validator
+    enabled: true
+    type: task_agent
+    team: event_management
+    supervisor: event_supervisor
+    context_key: event
+    prompt_file: prompts/event_validator.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
       - tag:events_schedule
       - tag:events_analytics
-      - tag:memory_context
-      - tag:search_shared
+      - tag:events_core
+      - tag:events_search
     exclude_tools: []
-    keywords:
-      - term: event
-        weight: 1.5
-      - calendar
-      - schedule
-      - meeting
-      - appointment
-      - availability
-      - book
-      - reserve
-      - add to calendar
-    description: Calendar events, scheduling, conflicts, and attendee coordination.
+    keywords: []
+    description: Validates event operations and highlights conflicts or issues.
 
-  - name: reminder_agent
+  - name: reminder_supervisor
     enabled: true
+    type: supervisor
+    team: reminder_management
+    context_key: reminder_team
+    prompt_file: prompts/reminder_supervisor.txt
+    tools: []
+    keywords: []
+    description: Orchestrates reminder lifecycle operations.
+
+  - name: reminder_retriever
+    enabled: true
+    type: task_agent
+    team: reminder_management
+    supervisor: reminder_supervisor
     context_key: reminder
-    prompt_file: prompts/reminder_agent.txt
+    prompt_file: prompts/reminder_retriever.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:reminders_core
+      - tag:search_shared
+      - tag:memory_context
+    exclude_tools: []
+    keywords: []
+    description: Retrieves and searches reminders (read-only).
+
+  - name: reminder_creator
+    enabled: true
+    type: task_agent
+    team: reminder_management
+    supervisor: reminder_supervisor
+    context_key: reminder
+    prompt_file: prompts/reminder_creator.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:reminders_core
+      - tag:memory_context
+    exclude_tools: []
+    keywords: []
+    description: Creates new reminders from structured or natural language input.
+
+  - name: reminder_editor
+    enabled: true
+    type: task_agent
+    team: reminder_management
+    supervisor: reminder_supervisor
+    context_key: reminder
+    prompt_file: prompts/reminder_editor.txt
     partials:
       - prompts/partials/safety.txt
       - prompts/partials/style.txt
     tools:
       - tag:reminders_core
       - tag:reminders_bulk
-      - tag:reminders_analytics
       - tag:memory_context
-      - tag:search_shared
     exclude_tools: []
-    keywords:
-      - term: remind
-        weight: 1.2
-      - reminder
-      - alert
-      - notify
-      - follow up
-      - snooze
-      - nudge
-    description: Reminders, follow-ups, snoozes, and nudge workflows.
+    keywords: []
+    description: Updates reminder content, times, and metadata.
 
-  - name: knowledge_agent
+  - name: reminder_completer
     enabled: true
+    type: task_agent
+    team: reminder_management
+    supervisor: reminder_supervisor
+    context_key: reminder
+    prompt_file: prompts/reminder_completer.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:reminders_core
+      - tag:reminders_bulk
+    exclude_tools: []
+    keywords: []
+    description: Marks reminders complete or archives them.
+
+  - name: reminder_deleter
+    enabled: true
+    type: task_agent
+    team: reminder_management
+    supervisor: reminder_supervisor
+    context_key: reminder
+    prompt_file: prompts/reminder_deleter.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:reminders_bulk
+    exclude_tools: []
+    keywords: []
+    description: Deletes reminders individually or in bulk with clear criteria.
+
+  - name: reminder_validator
+    enabled: true
+    type: task_agent
+    team: reminder_management
+    supervisor: reminder_supervisor
+    context_key: reminder
+    prompt_file: prompts/reminder_validator.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:reminders_analytics
+      - tag:reminders_core
+      - tag:memory_context
+    exclude_tools: []
+    keywords: []
+    description: Validates reminder operations and reports issues.
+
+  - name: knowledge_supervisor
+    enabled: true
+    type: supervisor
+    team: knowledge_management
+    context_key: knowledge_team
+    prompt_file: prompts/knowledge_supervisor.txt
+    tools: []
+    keywords: []
+    description: Orchestrates knowledge and notes operations.
+
+  - name: knowledge_retriever
+    enabled: true
+    type: task_agent
+    team: knowledge_management
+    supervisor: knowledge_supervisor
     context_key: knowledge
-    prompt_file: prompts/knowledge_agent.txt
+    prompt_file: prompts/knowledge_retriever.txt
     partials:
       - prompts/partials/safety.txt
       - prompts/partials/style.txt
@@ -126,23 +453,35 @@ agents:
       - integration_status
       - unified_search
     exclude_tools: []
-    keywords:
-      - term: memory
-        weight: 1.8
-      - remember
-      - note
-      - save
-      - recall
-      - document
-      - search
-      - knowledge
-      - vault
-    description: Memory retrieval, document search, vault operations, and knowledge queries.
+    keywords: []
+    description: Retrieves knowledge from memories and documents (read-only).
 
-  - name: note_agent
+  - name: knowledge_searcher
     enabled: true
+    type: task_agent
+    team: knowledge_management
+    supervisor: knowledge_supervisor
+    context_key: knowledge
+    prompt_file: prompts/knowledge_searcher.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:memory_vector
+      - tag:documents
+      - tag:memory_context
+      - unified_search
+    exclude_tools: []
+    keywords: []
+    description: Performs vector/fuzzy/document searches (read-only).
+
+  - name: note_creator
+    enabled: true
+    type: task_agent
+    team: knowledge_management
+    supervisor: knowledge_supervisor
     context_key: note
-    prompt_file: prompts/note_agent.txt
+    prompt_file: prompts/note_creator.txt
     partials:
       - prompts/partials/safety.txt
       - prompts/partials/style.txt
@@ -151,52 +490,62 @@ agents:
       - tag:notes_support
       - tag:memory_context
     exclude_tools: []
-    keywords:
-      - term: note
-        weight: 1.6
-      - journal
-      - log
-      - write down
-      - append note
-      - capture
-      - save this
-      - summary note
-    description: Captures and appends notes to the vault and triggers embeddings.
+    keywords: []
+    description: Creates new notes in the vault.
 
-  - name: recorder_agent
+  - name: note_appender
     enabled: true
-    context_key: recorder
-    prompt_file: prompts/recorder_agent.txt
+    type: task_agent
+    team: knowledge_management
+    supervisor: knowledge_supervisor
+    context_key: note
+    prompt_file: prompts/note_appender.txt
     partials:
       - prompts/partials/safety.txt
       - prompts/partials/style.txt
     tools:
-      - tag:life_logging
-      - tag:food_core
+      - tag:notes_core
+      - tag:notes_support
       - tag:memory_context
     exclude_tools: []
-    keywords:
-      - term: log
-        weight: 1.5
-      - record
-      - track
-      - period
-      - menstrual
-      - cycle
-      - sex
-      - intimate
-      - haircut
-      - doctor
-      - dentist
-      - spent
-      - cost
-      - purchase
-    description: Logs life events, health data, cycles, and miscellaneous expenses.
+    keywords: []
+    description: Appends or updates existing notes in the vault.
 
-  - name: analyst_agent
+  - name: knowledge_validator
     enabled: true
-    context_key: analyst
-    prompt_file: prompts/analyst_agent.txt
+    type: task_agent
+    team: knowledge_management
+    supervisor: knowledge_supervisor
+    context_key: knowledge
+    prompt_file: prompts/knowledge_validator.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:documents
+      - tag:memory_vector
+      - tag:memory_context
+    exclude_tools: []
+    keywords: []
+    description: Validates knowledge/note operations and flags issues.
+
+  - name: logging_supervisor
+    enabled: true
+    type: supervisor
+    team: life_logging
+    context_key: logging_team
+    prompt_file: prompts/logging_supervisor.txt
+    tools: []
+    keywords: []
+    description: Orchestrates life logging operations.
+
+  - name: table_discovery
+    enabled: true
+    type: task_agent
+    team: life_logging
+    supervisor: logging_supervisor
+    context_key: recorder
+    prompt_file: prompts/table_discovery.txt
     partials:
       - prompts/partials/safety.txt
       - prompts/partials/style.txt
@@ -204,18 +553,200 @@ agents:
       - tag:reporting
       - tag:memory_context
     exclude_tools: []
-    keywords:
-      - term: analyze
-        weight: 1.5
-      - analysis
-      - report
-      - chart
-      - graph
-      - trend
-      - correlation
-      - how many
-      - how much
-      - statistics
-      - stats
-      - summary of data
-    description: Analyzes data, runs reports, and answers complex questions about logged history.
+    keywords: []
+    description: Discovers the appropriate table for a logging request.
+
+  - name: schema_inspector
+    enabled: true
+    type: task_agent
+    team: life_logging
+    supervisor: logging_supervisor
+    context_key: recorder
+    prompt_file: prompts/schema_inspector.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:reporting
+    exclude_tools: []
+    keywords: []
+    description: Inspects target table schema and required fields.
+
+  - name: db_operation
+    enabled: true
+    type: task_agent
+    team: life_logging
+    supervisor: logging_supervisor
+    context_key: recorder
+    prompt_file: prompts/db_operation.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:reporting
+      - tag:memory_context
+    exclude_tools: []
+    keywords: []
+    description: Executes INSERT/UPDATE/DELETE operations for logging.
+
+  - name: logging_validator
+    enabled: true
+    type: task_agent
+    team: life_logging
+    supervisor: logging_supervisor
+    context_key: recorder
+    prompt_file: prompts/logging_validator.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:reporting
+      - tag:memory_context
+    exclude_tools: []
+    keywords: []
+    description: Validates logging operations and data integrity.
+
+  - name: analytics_supervisor
+    enabled: true
+    type: supervisor
+    team: analytics
+    context_key: analytics_team
+    prompt_file: prompts/analytics_supervisor.txt
+    tools: []
+    keywords: []
+    description: Orchestrates analytics and reporting operations.
+
+  - name: task_analyst
+    enabled: true
+    type: task_agent
+    team: analytics
+    supervisor: analytics_supervisor
+    context_key: analyst
+    prompt_file: prompts/task_analyst.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:tasks_analytics
+      - tag:tasks_search
+      - tag:tasks_quick_wins
+    exclude_tools: []
+    keywords: []
+    description: Analyzes task data and productivity patterns.
+
+  - name: event_analyst
+    enabled: true
+    type: task_agent
+    team: analytics
+    supervisor: analytics_supervisor
+    context_key: analyst
+    prompt_file: prompts/event_analyst.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:events_analytics
+      - tag:events_search
+      - tag:events_schedule
+    exclude_tools: []
+    keywords: []
+    description: Analyzes calendar/time usage patterns.
+
+  - name: life_analyst
+    enabled: true
+    type: task_agent
+    team: analytics
+    supervisor: analytics_supervisor
+    context_key: analyst
+    prompt_file: prompts/life_analyst.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:reporting
+      - tag:memory_context
+      - tag:life_logging
+    exclude_tools: []
+    keywords: []
+    description: Analyzes logged life data (food/health/habits/expenses).
+
+  - name: reminder_analyst
+    enabled: true
+    type: task_agent
+    team: analytics
+    supervisor: analytics_supervisor
+    context_key: analyst
+    prompt_file: prompts/reminder_analyst.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - tag:reminders_analytics
+      - tag:reminders_core
+    exclude_tools: []
+    keywords: []
+    description: Analyzes reminder patterns and completion rates.
+
+  - name: integration_supervisor
+    enabled: true
+    type: supervisor
+    team: integrations
+    context_key: integration_team
+    prompt_file: prompts/integration_supervisor.txt
+    tools: []
+    keywords: []
+    description: Orchestrates external integration operations.
+
+  - name: todoist_agent
+    enabled: true
+    type: task_agent
+    team: integrations
+    supervisor: integration_supervisor
+    context_key: integration
+    prompt_file: prompts/todoist_agent.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - get_todoist_project_tree
+      - get_todoist_labels
+      - get_todoist_task_tree
+    exclude_tools: []
+    keywords: []
+    description: Retrieves Todoist projects, labels, and task trees.
+
+  - name: google_calendar_agent
+    enabled: true
+    type: task_agent
+    team: integrations
+    supervisor: integration_supervisor
+    context_key: integration
+    prompt_file: prompts/google_calendar_agent.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - create_calendar_event
+      - get_upcoming_events
+      - find_free_time
+    exclude_tools: []
+    keywords: []
+    description: Syncs or retrieves Google Calendar events.
+
+  - name: integration_health_agent
+    enabled: true
+    type: task_agent
+    team: integrations
+    supervisor: integration_supervisor
+    context_key: integration
+    prompt_file: prompts/integration_health_agent.txt
+    partials:
+      - prompts/partials/safety.txt
+      - prompts/partials/style.txt
+    tools:
+      - integration_status
+      - tag:memory_context
+    exclude_tools: []
+    keywords: []
+    description: Checks integration status and health.
+

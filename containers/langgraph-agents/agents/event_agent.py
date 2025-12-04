@@ -7,8 +7,10 @@ Refactored following LangGraph tutorial best practices:
 - Simple agent function (minimal overhead)
 """
 
-from typing import Dict, Any
-from datetime import datetime
+from typing import Dict, Any, Optional, Tuple
+from datetime import datetime, timedelta
+import re
+from dateutil import parser as dateparser
 from langchain_core.messages import AIMessage
 from graph.state import MultiAgentState
 from utils.logging import get_logger
@@ -19,6 +21,7 @@ from .base import (
     create_cached_react_agent,
     detect_handoff,
 )
+from tools import database as db_tools
 
 logger = get_logger(__name__)
 
@@ -39,6 +42,43 @@ EVENT_CONTEXT_KEY = EVENT_AGENT_CONFIG.context_key
 
 # Create ReAct agent once (following tutorial pattern)
 _event_react_agent = None
+
+
+def _detect_date_range(text: str) -> Optional[Tuple[datetime, datetime]]:
+    """
+    Heuristic date detector: accepts YYYY-MM-DD or natural language dates (e.g., "Dec 1, 2025").
+    Returns [start, start+1d). If multiple dates exist, uses the first.
+    """
+    if not text:
+        return None
+
+    # Fast path: explicit ISO date
+    iso_match = re.search(r"(20\d{2}-\d{2}-\d{2})", text)
+    if iso_match:
+        try:
+            start = datetime.fromisoformat(iso_match.group(1))
+            return start, start + timedelta(days=1)
+        except Exception:
+            pass
+
+    # Fallback: natural language parsing
+    try:
+        parsed = dateparser.parse(text, fuzzy=True)
+        if parsed:
+            start = parsed
+            return start, start + timedelta(days=1)
+    except Exception:
+        return None
+
+    return None
+
+
+def _get_last_human_message(state: MultiAgentState) -> Optional[str]:
+    """Return last human message content if available."""
+    for msg in reversed(state.get("messages", [])):
+        if hasattr(msg, "type") and getattr(msg, "type", "") == "human":
+            return msg.content
+    return None
 
 
 def _get_event_agent():
@@ -88,8 +128,38 @@ async def event_agent_node(state: MultiAgentState) -> Dict[str, Any]:
         # Create context message (following tutorial pattern)
         context_message = create_context_message(state, EVENT_CONTEXT_KEY, EVENT_AGENT_PROMPT)
 
+        # Auto-fetch events for mentioned date ranges to ground the response
+        messages_with_context = [context_message]
+        last_user_msg = _get_last_human_message(state)
+        date_range = _detect_date_range(last_user_msg or "")
+        if date_range:
+            start_dt, end_dt = date_range
+            try:
+                # Call tool via ainvoke with a single mapping to avoid BaseTool kwargs issues
+                events = await db_tools.search_events.ainvoke({
+                    "user_id": state["user_id"],
+                    "start_date": start_dt.isoformat(),
+                    "end_date": end_dt.isoformat(),
+                    "limit": 100,
+                })
+            except Exception as e:
+                logger.error(f"Auto-fetch search_events failed: {e}", exc_info=True)
+                events = []
+
+            sample = ", ".join(e.get("title", "untitled") for e in events[:5]) if events else "none"
+            if events:
+                messages_with_context.append({
+                    "type": "system",
+                    "content": f"Auto-context: fetched {len(events)} events from {start_dt.date()} to {end_dt.date()}. Sample: {sample}"
+                })
+            else:
+                messages_with_context.append({
+                    "type": "system",
+                    "content": f"Auto-context: no events found from {start_dt.date()} to {end_dt.date()}."
+                })
+
         # Prepend context to messages
-        messages_with_context = [context_message] + list(state["messages"])
+        messages_with_context += list(state["messages"])
 
         # Invoke agent (simple like tutorial)
         result = await agent.ainvoke(

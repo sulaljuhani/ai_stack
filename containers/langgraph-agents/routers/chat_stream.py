@@ -130,108 +130,32 @@ async def stream_agent_response(
         completion_id = f"chatcmpl-{uuid4().hex[:8]}"
         created_timestamp = int(time.time())
 
-        # Track if we've started streaming
-        started = False
-        full_response = ""
+        # Run the workflow to completion and surface only the final user-facing message
+        result = await app.ainvoke(initial_state, config=config)
+        messages = result.get("messages", [])
+        last_msg = messages[-1] if messages else None
+        content = (
+            last_msg.content if last_msg and hasattr(last_msg, "content")
+            else (str(last_msg) if last_msg is not None else "")
+        )
+        if not content:
+            content = "No response generated."
 
-        # Stream workflow events
-        async for event in app.astream_events(
-            initial_state,
-            config=config,
-            version="v2"
-        ):
-            event_type = event.get("event")
-
-            # Handle chat model streaming (token generation)
-            if event_type == "on_chat_model_stream":
-                chunk = event.get("data", {}).get("chunk")
-                if chunk and hasattr(chunk, "content"):
-                    content = chunk.content
-                    if content:
-                        # Send first chunk with role
-                        if not started:
-                            yield format_sse_event({
-                                "id": completion_id,
-                                "object": "chat.completion.chunk",
-                                "created": created_timestamp,
-                                "model": request.model,
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {
-                                        "role": "assistant",
-                                        "content": content
-                                    },
-                                    "finish_reason": None
-                                }]
-                            })
-                            started = True
-                        else:
-                            # Send content chunks
-                            yield format_sse_event({
-                                "id": completion_id,
-                                "object": "chat.completion.chunk",
-                                "created": created_timestamp,
-                                "model": request.model,
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {
-                                        "content": content
-                                    },
-                                    "finish_reason": None
-                                }]
-                            })
-
-                        full_response += content
-
-            # Handle tool execution events (optional: show "thinking")
-            elif event_type == "on_tool_start":
-                tool_name = event.get("name", "unknown")
-                logger.debug(f"Tool started: {tool_name}")
-                # Optionally send a thinking indicator
-                # yield format_sse_event({"type": "thinking", "tool": tool_name})
-
-            elif event_type == "on_tool_end":
-                tool_name = event.get("name", "unknown")
-                logger.debug(f"Tool completed: {tool_name}")
-
-        # If no streaming occurred, use fallback
-        if not started:
-            # Get the final result
-            result = await app.ainvoke(initial_state, config=config)
-            messages = result.get("messages", [])
-            last_msg = messages[-1] if messages else None
-
-            if last_msg:
-                content = last_msg.content if hasattr(last_msg, 'content') else str(last_msg)
-
-                # Send complete response as single chunk
-                yield format_sse_event({
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created_timestamp,
-                    "model": request.model,
-                    "choices": [{
-                        "index": 0,
-                        "delta": {
-                            "role": "assistant",
-                            "content": content
-                        },
-                        "finish_reason": "stop"
-                    }]
-                })
-        else:
-            # Send finish chunk
-            yield format_sse_event({
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created_timestamp,
-                "model": request.model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": "stop"
-                }]
-            })
+        # Send complete response as a single chunk so only Sebastian's summary is visible
+        yield format_sse_event({
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created_timestamp,
+            "model": request.model,
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "content": content
+                },
+                "finish_reason": "stop"
+            }]
+        })
 
         # Send completion signal
         yield format_sse_done()

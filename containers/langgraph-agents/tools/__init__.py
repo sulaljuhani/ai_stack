@@ -1,11 +1,6 @@
 """Tool functions for agents to interact with databases and services."""
 
 from .database import (
-    search_food_log,
-    log_food_entry,
-    update_food_entry,
-    get_food_by_rating,
-    analyze_food_patterns,
     search_tasks,
     create_task,
     update_task,
@@ -18,14 +13,7 @@ from .database import (
     check_time_conflicts,
 )
 
-from .vector import (
-    vector_search_foods,
-    vector_search_memories,
-)
-
-from .hybrid import (
-    get_food_recommendations,
-)
+from .vector import vector_search_memories
 
 from .documents import (
     embed_document,
@@ -150,12 +138,6 @@ from .todoist_mirror import (
     get_todoist_task_tree,
 )
 __all__ = [
-    # Database - Food
-    "search_food_log",
-    "log_food_entry",
-    "update_food_entry",
-    "get_food_by_rating",
-    "analyze_food_patterns",
     # Database - Tasks
     "search_tasks",
     "create_task",
@@ -169,10 +151,7 @@ __all__ = [
     "get_events_week",
     "check_time_conflicts",
     # Vector
-    "vector_search_foods",
     "vector_search_memories",
-    # Hybrid
-    "get_food_recommendations",
     # Documents
     "embed_document",
     "reembed_vault_file",

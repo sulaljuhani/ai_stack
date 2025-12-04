@@ -264,7 +264,7 @@ async def root():
         "version": "1.0.0",
         "status": "running",
         "llm_provider": settings.llm_provider,
-        "agents": ["food_agent", "task_agent", "event_agent"]
+        "agents": ["task_agent", "event_agent", "reminder_agent", "knowledge_agent", "note_agent", "recorder_agent", "analyst_agent"]
     }
 
 

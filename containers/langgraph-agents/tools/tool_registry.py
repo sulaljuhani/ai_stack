@@ -167,15 +167,6 @@ class ToolRunner:
 
 
 def _register_all_tools() -> None:
-    # Food
-    register_tool("search_food_log", database.search_food_log, ["food_core", "food", "db"])
-    register_tool("log_food_entry", database.log_food_entry, ["food_core", "food", "db"])
-    register_tool("update_food_entry", database.update_food_entry, ["food_core", "food", "db"])
-    register_tool("get_food_by_rating", database.get_food_by_rating, ["food_core", "food", "db"])
-    register_tool("analyze_food_patterns", database.analyze_food_patterns, ["food_core", "food"])
-    register_tool("vector_search_foods", vector.vector_search_foods, ["food_vector", "food", "vector"])
-    register_tool("get_food_recommendations", hybrid.get_food_recommendations, ["food_recommendations", "food", "hybrid"])
-
     # Tasks
     register_tool("search_tasks", database.search_tasks, ["tasks_core", "tasks", "db"])
     register_tool("create_task", database.create_task, ["tasks_core", "tasks", "db"])
@@ -276,6 +267,12 @@ def _register_all_tools() -> None:
     register_tool("log_menstrual_cycle", life_logging.log_menstrual_cycle, ["life_logging", "recorder"])
     register_tool("log_intimate_activity", life_logging.log_intimate_activity, ["life_logging", "recorder"])
     register_tool("log_misc_event", life_logging.log_misc_event, ["life_logging", "recorder"])
+    register_tool("log_food_entry", database.log_food_entry, ["life_logging", "recorder", "food_log"], "Log a food entry to food_log table")
+    register_tool("search_food_log", database.search_food_log, ["life_logging", "recorder", "food_log"], "Search food_log entries")
+    register_tool("update_food_entry", database.update_food_entry, ["life_logging", "recorder", "food_log"], "Update rating/notes for food_log entry")
+    register_tool("list_tables", reporting.list_tables, ["reporting", "analyst", "recorder", "db_introspect"], "List tables in schema")
+    register_tool("get_table_schema", reporting.get_table_schema, ["reporting", "analyst", "recorder", "db_introspect"], "Get table schema")
+    register_tool("insert_table_row", reporting.insert_table_row, ["reporting", "analyst", "recorder", "db_write"], "Insert into any table by column mapping")
 
     # Reporting (Analyst)
     register_tool("run_read_only_sql", reporting.run_read_only_sql, ["reporting", "analyst"])

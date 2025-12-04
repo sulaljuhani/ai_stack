@@ -380,7 +380,7 @@ async def log_food_entry(
     query = """
         INSERT INTO food_log (
             user_id, food_name, location, preference, restaurant_name,
-            description, meal_type, ingredients, tags, calories, notes, consumed_at
+                description, meal_type, ingredients, tags, calories, notes, consumed_at
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING id, user_id, food_name, location, preference, restaurant_name,
@@ -393,7 +393,7 @@ async def log_food_entry(
             row = await conn.fetchrow(
                 query,
                 user_id, food_name, location, preference, restaurant_name,
-                description, meal_type, ingredients or [], tags or [],
+                description, meal_type, ingredients, tags,
                 calories, notes, consumed_at_dt
             )
             result = dict(row)
@@ -696,27 +696,8 @@ async def create_task(
     try:
         async with pool.acquire() as conn:
             # Step 1: Check for exact title match (fast path)
-            exact_match_check = """
-                SELECT id, title, description, status, priority, due_date, created_at
-                FROM tasks
-                WHERE user_id = $1
-                  AND LOWER(title) = LOWER($2)
-                  AND status NOT IN ('completed', 'deleted')
-                LIMIT 1
-            """
-
-            exact_match = await conn.fetchrow(exact_match_check, user_id, title)
-
-            if exact_match:
-                logger.info(f"Exact duplicate task found: {title}")
-                result = {
-                    "duplicate": True,
-                    "similarity": 1.0,
-                    "match_type": "exact",
-                    "message": f"A task with the title '{title}' already exists",
-                    "existing_task": dict(exact_match)
-                }
-                return serialize_tool_result(result)
+            # Exact-title duplicate check disabled to avoid false positives on re-entries.
+            # (Semantic duplicate detection below still catches near-identical tasks.)
 
             # Step 2: Check for semantic similarity using embeddings
             # Get recent non-completed tasks for similarity comparison
@@ -725,6 +706,7 @@ async def create_task(
                 FROM tasks
                 WHERE user_id = $1
                   AND status NOT IN ('completed', 'deleted')
+                  AND title NOT LIKE '### %%'
                   AND created_at > NOW() - INTERVAL '30 days'
                 ORDER BY created_at DESC
                 LIMIT 20
@@ -991,8 +973,10 @@ async def search_events(
 
     pool = await get_db_pool()
 
-    start_dt = _normalize_dt(start_date)
-    end_dt = _normalize_dt(end_date)
+    # Default window: today (UTC) through +365d if caller did not specify.
+    now_utc = datetime.utcnow()
+    start_dt = _normalize_dt(start_date) or now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_dt = _normalize_dt(end_date) or (now_utc + timedelta(days=365))
 
     query = """
         SELECT
@@ -1004,15 +988,14 @@ async def search_events(
     params = [user_id]
     param_count = 1
 
-    if start_dt:
-        param_count += 1
-        params.append(start_dt)
-        query += f" AND start_time >= ${param_count}"
+    # Always filter by a window (defaults above) to avoid returning unrelated rows
+    param_count += 1
+    params.append(start_dt)
+    query += f" AND start_time >= ${param_count}"
 
-    if end_dt:
-        param_count += 1
-        params.append(end_dt)
-        query += f" AND start_time <= ${param_count}"
+    param_count += 1
+    params.append(end_dt)
+    query += f" AND start_time <= ${param_count}"
 
     # Use parameterized limit for consistency
     param_count += 1
@@ -1037,8 +1020,8 @@ async def search_events(
 async def create_event(
     user_id: str,
     title: str,
-    start_time: str,
-    end_time: str,
+    start_time: Any,
+    end_time: Any,
     description: Optional[str] = None,
     location: Optional[str] = None
 ) -> str:
@@ -1063,12 +1046,26 @@ async def create_event(
     if user_id == 'anythingllm' or not user_id:
         user_id = '00000000-0000-0000-0000-000000000001'
 
+    # Normalize times (accept both strings and datetime objects)
+    def _to_datetime(value: Any) -> datetime:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            parsed = normalize_due_date(value)
+            if parsed:
+                return parsed
+            return date_parser.parse(value)
+        raise ValueError("start_time and end_time must be strings or datetime objects")
+
     # Validate inputs
     if not title or not title.strip():
         raise ValueError("title is required and cannot be empty")
 
     if not start_time or not end_time:
         raise ValueError("start_time and end_time are required")
+
+    start_dt = _to_datetime(start_time)
+    end_dt = _to_datetime(end_time)
 
     pool = await get_db_pool()
 
@@ -1089,7 +1086,7 @@ async def create_event(
                 LIMIT 1
             """
 
-            exact_match = await conn.fetchrow(exact_match_check, user_id, title, start_time, end_time)
+            exact_match = await conn.fetchrow(exact_match_check, user_id, title, start_dt, end_dt)
 
             if exact_match:
                 logger.info(f"Exact duplicate event found: {title}")
@@ -1114,7 +1111,7 @@ async def create_event(
                 LIMIT 20
             """
 
-            nearby_events = await conn.fetch(similar_events_query, user_id, start_time)
+            nearby_events = await conn.fetch(similar_events_query, user_id, start_dt)
 
             if nearby_events:
                 # Get embedding for new event
@@ -1152,7 +1149,7 @@ async def create_event(
 
             row = await conn.fetchrow(
                 insert_query,
-                user_id, title, description, start_time, end_time, location
+                user_id, title, description, start_dt, end_dt, location
             )
             result = {
                 "duplicate": False,

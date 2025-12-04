@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from graph.state import MultiAgentState
 from utils.llm import get_agent_llm
 from utils.logging import get_logger
+from agents.team_registry import get_team_config
 
 logger = get_logger(__name__)
 
@@ -131,7 +132,7 @@ class HandoffDecision(BaseModel):
     """Structured handoff decision."""
 
     should_handoff: bool
-    target_agent: Optional[Literal["food_agent", "task_agent", "event_agent", "reminder_agent", "note_agent", "knowledge_agent"]] = None
+    target_agent: Optional[Literal["task_agent", "event_agent", "reminder_agent", "note_agent", "knowledge_agent"]] = None
     reason: Optional[str] = None
 
 
@@ -183,7 +184,6 @@ async def detect_handoff(
 Current agent: {current_agent}
 
 Agent domains:
-- food_agent: Food, meals, eating, nutrition, dietary preferences
 - task_agent: Tasks, todos, productivity, planning, notes, and memory storage
 - reminder_agent: Reminders, alerts, nudges, follow-ups
 - event_agent: Calendar, schedule, meetings, appointments, availability
@@ -234,7 +234,7 @@ def load_system_prompt(agent_name: str, prompt_file: str | None = None, partial_
     Load system prompt from file and combine with universal personality.
 
     Args:
-        agent_name: Name of agent (food_agent, task_agent, etc.)
+        agent_name: Name of agent (task_agent, event_agent, etc.)
 
     Returns:
         Combined system prompt text (personality + agent-specific instructions)
@@ -325,3 +325,100 @@ def create_context_message(state: MultiAgentState, agent_name: str, system_promp
 """
 
     return {"role": "system", "content": context_content}
+
+
+def create_internal_response(
+    state: MultiAgentState,
+    agent_name: str,
+    context_key: str,
+    result_content: str,
+    team: str,
+    additional_state: dict = None
+) -> dict:
+    """
+    Create internal-only response for specialist agents.
+
+    Specialist agents (validators, retrievers, creators, etc.) should NOT
+    add messages to state - only Sebastian talks to users. This function
+    creates the correct return structure for internal communication.
+
+    Args:
+        state: Current state
+        agent_name: Name of this agent
+        context_key: Context key for agent_contexts
+        result_content: Brief result summary (internal only)
+        team: Team name (e.g., "task_management")
+        additional_state: Optional additional state fields
+
+    Returns:
+        State update dict WITHOUT messages field
+    """
+    from datetime import datetime
+
+    agent_contexts = state.get("agent_contexts", {})
+    agent_contexts[context_key] = {
+        "last_interaction": datetime.utcnow().isoformat(),
+        "last_result": result_content[:500],  # Keep concise
+    }
+
+    # Default handoff: go back to the team supervisor (or Sebastian if unknown)
+    target_agent = None
+    current_team = state.get("current_team") or team
+    if current_team and current_team != "unknown":
+        team_cfg = get_team_config(current_team)
+        if team_cfg:
+            target_agent = team_cfg.supervisor
+    if not target_agent:
+        target_agent = "sebastian_supervisor"
+
+    logger.info(
+        "Internal response from %s -> target_agent=%s, team=%s, team_stage=%s",
+        agent_name,
+        target_agent,
+        current_team,
+        state.get("team_context", {}).get(current_team, {}).get("workflow_stage"),
+    )
+
+    base_response = {
+        # NO messages field - internal only!
+        "current_agent": agent_name,
+        "previous_agent": state.get("current_agent"),
+        "agent_contexts": agent_contexts,
+        "turn_count": state["turn_count"] + 1,
+        "updated_at": datetime.utcnow().isoformat(),
+        "current_team": current_team,
+        "target_agent": target_agent,
+    }
+
+    if additional_state:
+        base_response.update(additional_state)
+
+    return base_response
+
+
+async def simple_llm_call(prompt: str, system_prompt: str = None, temperature: float = 0.3) -> str:
+    """
+    Single LLM call without React agent loops.
+
+    Use this for specialist agents that need LLM reasoning but don't need
+    multi-turn conversation or tool loops. Much more efficient than create_react_agent.
+
+    Args:
+        prompt: The user prompt/question
+        system_prompt: Optional system instructions
+        temperature: LLM temperature
+
+    Returns:
+        LLM response as string
+    """
+    from langchain_core.messages import SystemMessage, HumanMessage
+
+    llm = get_cached_llm(temperature)
+
+    messages = []
+    if system_prompt:
+        messages.append(SystemMessage(content=system_prompt))
+    messages.append(HumanMessage(content=prompt))
+
+    response = await llm.ainvoke(messages)
+    return response.content if hasattr(response, 'content') else str(response)
