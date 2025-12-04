@@ -60,7 +60,7 @@ Allowed Columns: {', '.join(sorted(allowed_cols))}
 
 Your task is to extract values from the user request to populate these columns.
 - Extract the core entity (e.g., 'jawi') for the main text column (food_name, title, etc.).
-- Map sentiment to preference/rating if applicable (e.g., "didn't like" -> "disliked", "liked" -> "liked").
+- Map sentiment to preference/rating if applicable (e.g., "didn't like" -> 0, "liked" -> 1).
 - Output ONLY valid JSON.
 """
             extraction_user_prompt = f"User Request: {request}\n\nExtract JSON payload:"
@@ -114,7 +114,42 @@ Your task is to extract values from the user request to populate these columns.
                 payload["notes"] = request[:500]
              
              if "preference" in allowed_cols:
-                payload["preference"] = "liked" # Default fallback
+                payload["preference"] = 1 # Default fallback (will be converted if schema requires text)
+
+        # Type enforcement based on schema
+        if schema and payload:
+             for col_def in schema:
+                col_name = col_def.get("column_name")
+                data_type = col_def.get("data_type")
+                
+                if col_name in payload:
+                    val = payload[col_name]
+                    
+                    # Enforce Integer
+                    if data_type in ["integer", "numeric", "bigint", "smallint"]:
+                        if isinstance(val, str):
+                            # Try to convert string sentiment to int
+                            if val.lower() in ["liked", "positive", "good", "yes", "true"]:
+                                payload[col_name] = 1
+                            elif val.lower() in ["disliked", "negative", "bad", "no", "false"]:
+                                payload[col_name] = 0
+                            else:
+                                # Try direct int conversion
+                                try:
+                                    payload[col_name] = int(val)
+                                except:
+                                    pass # Keep as is
+                    
+                    # Enforce String
+                    elif data_type in ["text", "character varying", "character"]:
+                        if not isinstance(val, str):
+                            if col_name == "preference" and isinstance(val, int):
+                                # Map 1/0 back to strings for preference if it is text
+                                if val == 1: payload[col_name] = "liked"
+                                elif val == 0: payload[col_name] = "disliked"
+                                else: payload[col_name] = str(val)
+                            else:
+                                payload[col_name] = str(val)
 
         # Insert row
         insert_result = await insert_table_row.ainvoke({"table_name": table_name, "data": payload})

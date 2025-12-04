@@ -40,7 +40,8 @@ async def run_read_only_sql(
 
 @tool
 async def get_table_schema(
-    table_name: str
+    table_name: str,
+    schema: str = "public"
 ) -> Dict[str, Any]:
     """
     Get the schema for a specific table to help construct queries.
@@ -49,11 +50,11 @@ async def get_table_schema(
     query = """
     SELECT column_name, data_type 
     FROM information_schema.columns 
-    WHERE table_name = $1;
+    WHERE table_name = $1 AND table_schema = $2;
     """
     try:
         async with pool.acquire() as conn:
-            rows = await conn.fetch(query, table_name)
+            rows = await conn.fetch(query, table_name, schema)
             results = [dict(row) for row in rows]
             return {"success": True, "schema": results}
     except Exception as e:
